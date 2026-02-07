@@ -1,0 +1,29 @@
+{
+    "torrentio": {
+        "base_url": "https://torrentio.strem.fun",
+        "config": "",
+        "preferred_quality": ["1080p", "720p"],
+        "exclude_keywords": ["cam", "hdcam", "telesync", "telecine"],
+        "max_results_per_episode": 5
+    },
+    "qbittorrent": {
+        "host": "http://localhost",
+        "port": 8080,
+        "username": "admin",
+        "password": "Torrentio001$",
+        "save_path": "",
+        "category": "stremio-series",
+        "sequential_download": true,
+        "first_last_piece_priority": true
+    },
+    "real_debrid": {
+        "enabled": false,
+        "api_key": ""
+    },
+    "download": {
+        "delay_between_episodes": 2,
+        "delay_between_seasons": 5,
+        "auto_select_best": true,
+        "dry_run": false
+    }
+}
