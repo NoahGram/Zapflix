@@ -6,9 +6,12 @@ import re
 import time
 import requests
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from cinemeta import Episode
+
+if TYPE_CHECKING:
+    from profiles import QualityProfile
 
 
 @dataclass
@@ -163,12 +166,29 @@ class TorrentioClient:
 
         return streams
 
-    def select_best_stream(self, streams: list[TorrentStream]) -> Optional[TorrentStream]:
-        """Select the best stream based on preferred quality and seeders."""
+    def select_best_stream(self, streams: list[TorrentStream],
+                           profile: Optional["QualityProfile"] = None,
+                           ) -> Optional[TorrentStream]:
+        """Select the best stream.
+
+        If a profile is provided, uses the profile's multi-factor scoring.
+        Otherwise falls back to simple quality + seeders ranking.
+        """
         if not streams:
             return None
 
-        # Score streams: preferred quality gets priority, then seeders
+        if profile is not None:
+            scored = []
+            for s in streams:
+                sc = profile.score_stream(s.title, s.quality, s.seeders, s.size)
+                if sc >= 0:  # -1 means hard-excluded
+                    scored.append((sc, s))
+            if not scored:
+                return None
+            scored.sort(key=lambda x: x[0], reverse=True)
+            return scored[0][1]
+
+        # Fallback: simple quality + seeders
         def score(s: TorrentStream) -> tuple:
             quality_score = 0
             for i, q in enumerate(self.preferred_quality):

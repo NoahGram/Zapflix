@@ -33,6 +33,7 @@ from rich.text import Text
 from cinemeta import search_series, get_series_metadata, Episode, Series
 from torrentio import TorrentioClient, TorrentStream
 from clients import QBittorrentClient, RealDebridClient, MagnetFileSaver, AddResult
+from profiles import QualityProfile, get_profile, list_profiles, load_custom_profile, PROFILES
 
 console = Console()
 
@@ -139,6 +140,7 @@ def run_download(
     config: dict,
     dry_run: bool = False,
     auto_select: bool = True,
+    profile: QualityProfile | None = None,
 ):
     """Main download loop - fetch streams and send to download client."""
 
@@ -210,7 +212,7 @@ def run_download(
 
         # Select stream
         if auto_select:
-            selected = torrentio.select_best_stream(streams)
+            selected = torrentio.select_best_stream(streams, profile=profile)
             if selected:
                 console.print(f"  [green]→ Auto-selected:[/green] {selected}")
             else:
@@ -355,8 +357,39 @@ Examples:
         action="store_true",
         help="Save magnet links to files instead of sending to a client",
     )
+    parser.add_argument(
+        "--profile",
+        choices=list(PROFILES.keys()),
+        help="Quality profile: " + ", ".join(
+            f"{n} ({p.description})" for n, p in PROFILES.items()
+        ),
+    )
+    parser.add_argument(
+        "--list-profiles",
+        action="store_true",
+        help="Show all available quality profiles and exit",
+    )
 
     args = parser.parse_args()
+
+    # List profiles and exit
+    if args.list_profiles:
+        table = Table(show_header=True, header_style="bold magenta", title="Quality Profiles")
+        table.add_column("Name", style="cyan", width=12)
+        table.add_column("Description", style="green")
+        table.add_column("Resolution", style="yellow")
+        table.add_column("Codec", style="dim")
+        table.add_column("Max Size", style="dim", width=10)
+        for name, p in PROFILES.items():
+            table.add_row(
+                name,
+                p.description,
+                " > ".join(p.preferred_resolution),
+                " > ".join(p.preferred_codecs[:2]),
+                f"{p.max_size_gb} GB",
+            )
+        console.print(table)
+        sys.exit(0)
 
     # Banner
     console.print(
@@ -434,6 +467,25 @@ Examples:
 
     # Initialize Torrentio client
     torrentio_cfg = config.get("torrentio", {})
+
+    # Resolve quality profile
+    profile = None
+    profile_name = args.profile or config.get("download", {}).get("profile", None)
+    if profile_name:
+        try:
+            # Check if config has a custom profile definition
+            custom = config.get("profiles", {}).get(profile_name)
+            if custom:
+                profile = load_custom_profile(custom)
+            else:
+                profile = get_profile(profile_name)
+            console.print(
+                f"\n[bold]📋 Profile:[/bold] [cyan]{profile.name}[/cyan] — {profile.description}"
+            )
+        except KeyError as e:
+            console.print(f"[red]{e}[/red]")
+            sys.exit(1)
+
     torrentio = TorrentioClient(
         base_url=torrentio_cfg.get("base_url", "https://torrentio.strem.fun"),
         config=args.torrentio_config or torrentio_cfg.get("config", ""),
@@ -456,6 +508,7 @@ Examples:
         config=config,
         dry_run=dry_run,
         auto_select=auto_select,
+        profile=profile,
     )
 
 

@@ -75,6 +75,12 @@ then your config string is `sort=qualitysize|qualityfilter=480p,scr,cam`.
 
 ## Usage
 
+
+### Enter Python Virtual Environment
+```bash
+source /home/noah/Repositories/TorrentDownloader/.venv/bin/activate
+```
+
 ### Interactive mode (recommended for first use)
 
 ```bash

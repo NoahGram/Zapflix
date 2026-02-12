@@ -7,10 +7,10 @@
         "max_results_per_episode": 5
     },
     "qbittorrent": {
-        "host": "http://localhost",
+        "host": "http://YOUR_NAS_IP",
         "port": 8080,
         "username": "admin",
-        "password": "Torrentio001$",
+        "password": "YOUR_PASSWORD",
         "save_path": "",
         "category": "stremio-series",
         "sequential_download": true,
@@ -18,12 +18,13 @@
     },
     "real_debrid": {
         "enabled": false,
-        "api_key": ""
+        "api_key": "YOUR_API_KEY_HERE"
     },
     "download": {
         "delay_between_episodes": 2,
         "delay_between_seasons": 5,
         "auto_select_best": true,
-        "dry_run": false
+        "dry_run": false,
+        "profile": "jellyfin"
     }
 }
