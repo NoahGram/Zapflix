@@ -1,5 +1,5 @@
 """
-Cinemeta client - fetches series metadata (seasons, episodes) from Stremio's Cinemeta addon.
+Cinemeta client - fetches series and movie metadata from Stremio's Cinemeta addon.
 """
 
 import requests
@@ -24,6 +24,23 @@ class Episode:
 
     def __str__(self) -> str:
         return f"{self.label} - {self.name}"
+
+
+@dataclass
+class Movie:
+    imdb_id: str
+    name: str
+    year: str
+    description: str = ""
+    runtime: str = ""
+    genres: list[str] = None
+
+    def __post_init__(self):
+        if self.genres is None:
+            self.genres = []
+
+    def __str__(self) -> str:
+        return f"{self.name} ({self.year})"
 
 
 @dataclass
@@ -60,11 +77,14 @@ class Series:
 
 
 def search_series(query: str) -> list[dict]:
-    """Search for a series by name. Returns list of {imdb_id, name, year}."""
+    """Search for a series by name. Returns list of {imdb_id, name, year, type}."""
     url = f"{CINEMETA_BASE}/catalog/series/top/search={requests.utils.quote(query)}.json"
-    resp = requests.get(url, timeout=15)
-    resp.raise_for_status()
-    data = resp.json()
+    try:
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        return []
 
     results = []
     for meta in data.get("metas", []):
@@ -73,9 +93,65 @@ def search_series(query: str) -> list[dict]:
                 "imdb_id": meta.get("imdb_id") or meta.get("id"),
                 "name": meta.get("name", "Unknown"),
                 "year": meta.get("releaseInfo", meta.get("year", "?")),
+                "type": "series",
             }
         )
     return results
+
+
+def search_movies(query: str) -> list[dict]:
+    """Search for a movie by name. Returns list of {imdb_id, name, year, type}."""
+    url = f"{CINEMETA_BASE}/catalog/movie/top/search={requests.utils.quote(query)}.json"
+    try:
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        return []
+
+    results = []
+    for meta in data.get("metas", []):
+        results.append(
+            {
+                "imdb_id": meta.get("imdb_id") or meta.get("id"),
+                "name": meta.get("name", "Unknown"),
+                "year": meta.get("releaseInfo", meta.get("year", "?")),
+                "type": "movie",
+            }
+        )
+    return results
+
+
+def search_all(query: str) -> list[dict]:
+    """Search both movies and series. Returns combined results sorted by relevance."""
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        future_movies = pool.submit(search_movies, query)
+        future_series = pool.submit(search_series, query)
+        movies = future_movies.result()
+        series = future_series.result()
+
+    # Interleave results: movies first (since user likely wants movies if typing a title),
+    # then series. Deduplicate by IMDB ID.
+    seen = set()
+    combined = []
+    # Alternate: movie, series, movie, series... to give balanced results
+    mi, si = 0, 0
+    while mi < len(movies) or si < len(series):
+        if mi < len(movies):
+            m = movies[mi]
+            mi += 1
+            if m["imdb_id"] not in seen:
+                seen.add(m["imdb_id"])
+                combined.append(m)
+        if si < len(series):
+            s = series[si]
+            si += 1
+            if s["imdb_id"] not in seen:
+                seen.add(s["imdb_id"])
+                combined.append(s)
+    return combined
 
 
 def get_series_metadata(imdb_id: str) -> Series:
@@ -121,4 +197,22 @@ def get_series_metadata(imdb_id: str) -> Series:
         year=year,
         seasons=seasons,
         total_episodes=total,
+    )
+
+
+def get_movie_metadata(imdb_id: str) -> Movie:
+    """Fetch movie metadata."""
+    url = f"{CINEMETA_BASE}/meta/movie/{imdb_id}.json"
+    resp = requests.get(url, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+
+    meta = data.get("meta", {})
+    return Movie(
+        imdb_id=imdb_id,
+        name=meta.get("name", "Unknown"),
+        year=meta.get("releaseInfo", meta.get("year", "?")),
+        description=meta.get("description", ""),
+        runtime=meta.get("runtime", ""),
+        genres=meta.get("genres", []),
     )

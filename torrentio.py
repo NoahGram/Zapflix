@@ -111,11 +111,17 @@ class TorrentioClient:
         )
 
     def _build_url(self, imdb_id: str, season: int, episode: int) -> str:
-        """Build the Torrentio stream API URL."""
+        """Build the Torrentio stream API URL for a series episode."""
         video_id = f"{imdb_id}:{season}:{episode}"
         if self.config:
             return f"{self.base_url}/{self.config}/stream/series/{video_id}.json"
         return f"{self.base_url}/stream/series/{video_id}.json"
+
+    def _build_movie_url(self, imdb_id: str) -> str:
+        """Build the Torrentio stream API URL for a movie."""
+        if self.config:
+            return f"{self.base_url}/{self.config}/stream/movie/{imdb_id}.json"
+        return f"{self.base_url}/stream/movie/{imdb_id}.json"
 
     def get_streams(self, episode: Episode) -> list[TorrentStream]:
         """Fetch available torrent streams for an episode."""
@@ -158,6 +164,52 @@ class TorrentioClient:
             )
 
             # Filter out excluded keywords
+            title_lower = title.lower()
+            if any(kw in title_lower for kw in self.exclude_keywords):
+                continue
+
+            streams.append(stream)
+
+        return streams
+
+    def get_movie_streams(self, imdb_id: str) -> list[TorrentStream]:
+        """Fetch available torrent streams for a movie."""
+        url = self._build_movie_url(imdb_id)
+
+        try:
+            resp = self.session.get(url, timeout=20)
+            resp.raise_for_status()
+            data = resp.json()
+        except requests.RequestException as e:
+            print(f"  ⚠ Failed to fetch streams: {e}")
+            return []
+
+        streams = []
+        for s in data.get("streams", []):
+            title = s.get("title", s.get("name", ""))
+            info_hash = None
+
+            if "infoHash" in s:
+                info_hash = s["infoHash"]
+            elif "url" in s:
+                match = re.search(r"btih:([a-fA-F0-9]{40})", s["url"])
+                if match:
+                    info_hash = match.group(1)
+
+            if not info_hash:
+                continue
+
+            quality = _extract_quality(title)
+            stream = TorrentStream(
+                title=title,
+                info_hash=info_hash.lower(),
+                file_idx=s.get("fileIdx"),
+                seeders=_extract_seeders(title),
+                size=_extract_size(title),
+                source=_extract_source(title),
+                quality=quality,
+            )
+
             title_lower = title.lower()
             if any(kw in title_lower for kw in self.exclude_keywords):
                 continue
