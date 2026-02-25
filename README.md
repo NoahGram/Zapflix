@@ -156,6 +156,9 @@ The script will add magnets to your Real-Debrid cloud instead of qBittorrent.
 | `--torrentio-config` | Override Torrentio config string |
 | `--config PATH` | Path to alternate config.json |
 
+## Quality Flags
+![alt text](images/image.png)
+
 ## File Structure
 
 ```
