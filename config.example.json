@@ -20,6 +20,13 @@
         "enabled": false,
         "api_key": "YOUR_API_KEY_HERE"
     },
+    "aria2": {
+        "enabled": false,
+        "host": "http://YOUR_NAS_IP",
+        "port": 6800,
+        "secret": "",
+        "download_dir": "/path/to/media/library"
+    },
     "download": {
         "delay_between_episodes": 2,
         "delay_between_seasons": 5,

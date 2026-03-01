@@ -18,6 +18,7 @@ Usage:
 
 import argparse
 import json
+import re
 import sys
 import time
 import os
@@ -34,7 +35,7 @@ from cinemeta import (
     Episode, Series, Movie,
 )
 from torrentio import TorrentioClient, TorrentStream
-from clients import QBittorrentClient, RealDebridClient, MagnetFileSaver, AddResult
+from clients import QBittorrentClient, RealDebridClient, MagnetFileSaver, Aria2Client, AddResult
 from profiles import QualityProfile, get_profile, list_profiles, load_custom_profile, PROFILES
 
 console = Console()
@@ -172,6 +173,144 @@ def _init_download_client(config: dict, dry_run: bool, fallback_name: str = "med
     return client
 
 
+def _init_aria2_client(config: dict):
+    """Initialize aria2 client if configured. Returns Aria2Client or None."""
+    aria2_config = config.get("aria2", {})
+    if not aria2_config.get("enabled", False):
+        return None
+
+    client = Aria2Client(
+        host=aria2_config.get("host", "http://localhost"),
+        port=aria2_config.get("port", 6800),
+        secret=aria2_config.get("secret", ""),
+        download_dir=aria2_config.get("download_dir", ""),
+    )
+
+    if client.test_connection():
+        return client
+
+    console.print("[yellow]⚠ aria2 configured but not reachable — skipping NAS download[/yellow]")
+    return None
+
+
+def _sync_rd_to_aria2(
+    rd_client: RealDebridClient,
+    aria2: Aria2Client,
+    content_name: str,
+    content_type: str,
+    base_dir: str = "",
+    timeout: int = 600,
+    poll_interval: int = 5,
+):
+    """Wait for RD torrents to complete and send download links to aria2.
+
+    Polls Real-Debrid until torrents finish processing, unrestricts the
+    download links, and sends them to aria2 on the NAS with a Jellyfin-
+    friendly folder structure.
+    """
+    torrent_ids = rd_client.get_pending_torrents()
+    if not torrent_ids:
+        return
+
+    console.print(
+        f"\n[bold]📥 Sending {len(torrent_ids)} torrent(s) to aria2 for NAS download...[/bold]"
+    )
+
+    total_files = 0
+    total_sent = 0
+    total_failed = 0
+
+    for tid in torrent_ids:
+        # Poll until RD has the torrent ready for download
+        start_time = time.time()
+        info = None
+
+        while time.time() - start_time < timeout:
+            info = rd_client.get_torrent_info(tid)
+            if not info:
+                break
+
+            status = info.get("status")
+            if status == "downloaded":
+                break
+            elif status in ("error", "virus", "dead"):
+                console.print(
+                    f"  [red]✗ RD torrent failed: {info.get('filename', '?')} ({status})[/red]"
+                )
+                info = None
+                break
+            else:
+                progress = info.get("progress", 0)
+                console.print(
+                    f"\r  [dim]⏳ {info.get('filename', '?')[:60]}: "
+                    f"{status} ({progress}%)[/dim]   ",
+                    end="",
+                )
+                time.sleep(poll_interval)
+        else:
+            console.print(
+                f"\n  [yellow]⏳ Torrent still processing after {timeout}s — "
+                f"will continue downloading in background on RD[/yellow]"
+            )
+            continue
+
+        if not info:
+            continue
+
+        links = info.get("links", [])
+        if not links:
+            console.print(f"  [yellow]⚠ No files in torrent: {info.get('filename', '?')}[/yellow]")
+            continue
+
+        console.print(f"\n  [bold]Unrestricting {len(links)} file(s):[/bold] {info.get('filename', '?')[:70]}")
+        total_files += len(links)
+
+        for link in links:
+            unrestricted = rd_client.unrestrict_link(link)
+            if not unrestricted or not unrestricted.get("download"):
+                console.print(f"    [red]✗ Failed to unrestrict link[/red]")
+                total_failed += 1
+                continue
+
+            url = unrestricted["download"]
+            filename = unrestricted.get("filename", "unknown")
+
+            # Build Jellyfin-friendly subdirectory
+            if content_type == "movie":
+                subdir = os.path.join(base_dir, content_name) if base_dir else ""
+            else:
+                # Detect season number from filename for proper organization
+                season_match = re.search(r'[Ss](\d{1,2})', filename)
+                if season_match:
+                    season_num = int(season_match.group(1))
+                    subdir = (
+                        os.path.join(base_dir, content_name, f"Season {season_num:02d}")
+                        if base_dir else ""
+                    )
+                else:
+                    subdir = os.path.join(base_dir, content_name) if base_dir else ""
+
+            gid = aria2.add_download(url, directory=subdir, filename=filename)
+            if gid:
+                console.print(f"    [green]✓[/green] {filename}")
+                total_sent += 1
+            else:
+                console.print(f"    [red]✗[/red] {filename}")
+                total_failed += 1
+
+            time.sleep(0.5)  # Small delay between unrestrict calls
+
+    # Summary
+    parts = [f"[green]✓ Sent: {total_sent}[/green]"]
+    if total_failed > 0:
+        parts.append(f"[red]✗ Failed: {total_failed}[/red]")
+    parts.append(f"Total files: {total_files}")
+
+    console.print(
+        Panel(" | ".join(parts), title="📥 NAS Download via aria2")
+    )
+
+
 def run_movie_download(
     movie: Movie,
     torrentio: TorrentioClient,
@@ -242,8 +381,8 @@ def run_movie_download(
             else:
                 console.print(f"  [red]✗ Failed to add[/red]")
         elif isinstance(client, RealDebridClient):
-            torrent_id = client.add_magnet(selected)
-            if torrent_id is not None:
+            result = client.add_magnet(selected)
+            if result in (AddResult.SUCCESS, AddResult.ALREADY_EXISTS):
                 console.print(f"  [green]✓ Added to Real-Debrid[/green]")
                 ok = True
             else:
@@ -258,6 +397,50 @@ def run_movie_download(
 
         if isinstance(client, QBittorrentClient):
             client.logout()
+
+        # Sync Real-Debrid downloads to NAS via aria2
+        if ok and isinstance(client, RealDebridClient) and not dry_run:
+            aria2 = _init_aria2_client(config)
+            if aria2:
+                # Use first year for Jellyfin folder name
+                year = movie.year.split("-")[0].split("–")[0].strip()
+                content_name = f"{movie.name} ({year})"
+                _sync_rd_to_aria2(
+                    rd_client=client,
+                    aria2=aria2,
+                    content_name=content_name,
+                    content_type="movie",
+                    base_dir=config.get("aria2", {}).get("download_dir", ""),
+                )
+
+
+def _parse_season_coverage(source: str) -> set[int]:
+    """Parse which seasons a torrent pack covers from its source/title.
+
+    Returns a set of season numbers covered, or empty set if not a multi-season pack.
+    Common patterns: "S01-S08", "Season 1-8", "Complete Series".
+    """
+    source_lower = source.lower()
+
+    # "Complete Series" / "Complete.Series"
+    if "complete series" in source_lower or "complete.series" in source_lower:
+        return set(range(1, 100))  # Covers all practical seasons
+
+    # "S01-S08", "S01-08", "s1-s8"
+    match = re.search(r's(\d{1,2})\s*[-–]\s*s?(\d{1,2})', source_lower)
+    if match:
+        start, end = int(match.group(1)), int(match.group(2))
+        if end > start:
+            return set(range(start, end + 1))
+
+    # "Season 1-8", "Seasons 1-8", "Season.1-8"
+    match = re.search(r'seasons?\s*\.?\s*(\d{1,2})\s*[-–]\s*(\d{1,2})', source_lower)
+    if match:
+        start, end = int(match.group(1)), int(match.group(2))
+        if end > start:
+            return set(range(start, end + 1))
+
+    return set()
 
 
 def run_download(
@@ -280,6 +463,10 @@ def run_download(
     skipped = 0
     already_have = 0  # Episodes covered by an already-added season pack
 
+    # Pack tracking — avoid duplicate downloads and redundant API calls
+    covered_hashes: set[str] = set()    # Info hashes already sent to client
+    covered_seasons: set[int] = set()   # Seasons fully covered by a detected pack
+
     safe_series_name = "".join(
         c if c.isalnum() or c in " -_" else "_" for c in series.name
     )
@@ -297,8 +484,16 @@ def run_download(
         if ep.season != current_season:
             current_season = ep.season
             console.print(f"\n[bold cyan]═══ Season {current_season} ═══[/bold cyan]")
-            if i > 0:
+            if ep.season in covered_seasons:
+                season_ep_count = sum(1 for e in episodes if e.season == ep.season)
+                console.print(f"  [cyan]↳ All {season_ep_count} episodes covered by season pack[/cyan]")
+            elif i > 0:
                 time.sleep(dl_config.get("delay_between_seasons", 5))
+
+        # Skip episodes already covered by a season pack
+        if ep.season in covered_seasons:
+            already_have += 1
+            continue
 
         # Fetch streams
         console.print(f"\n  [bold]{ep.label}[/bold] - {ep.name}")
@@ -336,6 +531,17 @@ def run_download(
                 skipped += 1
                 continue
 
+        # Check if this stream's hash was already added (same pack reused)
+        if selected.info_hash.lower() in covered_hashes:
+            pack_seasons = _parse_season_coverage(selected.source)
+            if pack_seasons:
+                new_covered = pack_seasons - covered_seasons
+                if new_covered:
+                    covered_seasons.update(pack_seasons)
+            console.print(f"  [cyan]↳ Already covered by season pack (same torrent)[/cyan]")
+            already_have += 1
+            continue
+
         # Download
         if dry_run:
             console.print(f"  [dim]Would download: {selected}[/dim]")
@@ -343,35 +549,55 @@ def run_download(
         else:
             subfolder = f"{safe_series_name}/Season {ep.season:02d}"
 
+            result = AddResult.FAILED
+
             if isinstance(client, QBittorrentClient):
                 result = client.add_torrent(
                     selected,
                     subfolder=subfolder,
                     tags=f"{series.name},S{ep.season:02d}",
                 )
-                if result == AddResult.SUCCESS:
-                    console.print(f"  [green]✓ Added to downloads[/green]")
-                    success += 1
-                elif result == AddResult.ALREADY_EXISTS:
-                    console.print(
-                        f"  [cyan]↳ Already covered by season pack (same torrent)[/cyan]"
-                    )
-                    already_have += 1
-                else:
-                    console.print(f"  [red]✗ Failed to add[/red]")
-                    failed += 1
             elif isinstance(client, RealDebridClient):
-                torrent_id = client.add_magnet(selected)
-                if torrent_id is not None:
-                    console.print(f"  [green]✓ Added to downloads[/green]")
-                    success += 1
-                else:
-                    console.print(f"  [red]✗ Failed to add[/red]")
-                    failed += 1
+                result = client.add_magnet(selected)
             elif isinstance(client, MagnetFileSaver):
                 path = client.save(selected, series.name, ep.label)
                 console.print(f"  [dim]Saved to {path}[/dim]")
+                result = AddResult.SUCCESS
+
+            # Handle result and detect season pack coverage
+            if result == AddResult.SUCCESS:
+                if not isinstance(client, MagnetFileSaver):
+                    console.print(f"  [green]✓ Added to downloads[/green]")
                 success += 1
+                covered_hashes.add(selected.info_hash.lower())
+                pack_seasons = _parse_season_coverage(selected.source)
+                if pack_seasons:
+                    new_covered = pack_seasons - covered_seasons
+                    if new_covered:
+                        covered_seasons.update(pack_seasons)
+                        season_list = sorted(pack_seasons)
+                        if season_list[-1] - season_list[0] + 1 == len(season_list):
+                            range_str = f"Seasons {season_list[0]}-{season_list[-1]}"
+                        else:
+                            range_str = f"Seasons {', '.join(str(s) for s in season_list)}"
+                        remaining = sum(
+                            1 for e in episodes[i + 1:]
+                            if e.season in pack_seasons
+                        )
+                        if remaining > 0:
+                            console.print(
+                                f"  [cyan]📦 Season pack — covers {range_str}"
+                                f" ({remaining} remaining episodes will be skipped)[/cyan]"
+                            )
+            elif result == AddResult.ALREADY_EXISTS:
+                console.print(
+                    f"  [cyan]↳ Already covered by season pack (same torrent)[/cyan]"
+                )
+                covered_hashes.add(selected.info_hash.lower())
+                pack_seasons = _parse_season_coverage(selected.source)
+                if pack_seasons:
+                    covered_seasons.update(pack_seasons)
+                already_have += 1
             else:
                 console.print(f"  [red]✗ Failed to add[/red]")
                 failed += 1
@@ -402,6 +628,20 @@ def run_download(
     # Cleanup
     if isinstance(client, QBittorrentClient):
         client.logout()
+
+    # Sync Real-Debrid downloads to NAS via aria2
+    if isinstance(client, RealDebridClient) and success > 0 and not dry_run:
+        aria2 = _init_aria2_client(config)
+        if aria2:
+            year = series.year.split("-")[0].split("–")[0].strip()
+            content_name = f"{series.name} ({year})"
+            _sync_rd_to_aria2(
+                rd_client=client,
+                aria2=aria2,
+                content_name=content_name,
+                content_type="series",
+                base_dir=config.get("aria2", {}).get("download_dir", ""),
+            )
 
 
 def main():

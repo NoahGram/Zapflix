@@ -203,6 +203,8 @@ class RealDebridClient:
                 "Authorization": f"Bearer {api_key}",
             }
         )
+        self._added_hashes: set[str] = set()  # Track hashes added this session
+        self._torrent_ids: dict[str, str] = {}  # hash -> torrent_id
 
     def test_connection(self) -> bool:
         """Test if the API key is valid."""
@@ -219,8 +221,18 @@ class RealDebridClient:
             print(f"  ✗ Cannot connect to Real-Debrid: {e}")
             return False
 
-    def add_magnet(self, stream: TorrentStream) -> Optional[str]:
-        """Add a magnet link to Real-Debrid. Returns the torrent ID."""
+    def add_magnet(self, stream: TorrentStream) -> AddResult:
+        """Add a magnet link to Real-Debrid.
+
+        Returns AddResult.ALREADY_EXISTS if the same info hash was already
+        added this session (e.g. season pack covering multiple episodes).
+        """
+        info_hash = stream.info_hash.lower()
+
+        # Deduplicate: skip if this exact hash was already added
+        if info_hash in self._added_hashes:
+            return AddResult.ALREADY_EXISTS
+
         try:
             resp = self.session.post(
                 f"{self.API_BASE}/torrents/addMagnet",
@@ -238,10 +250,46 @@ class RealDebridClient:
                     data={"files": "all"},
                     timeout=15,
                 )
-                return torrent_id
+                self._added_hashes.add(info_hash)
+                self._torrent_ids[info_hash] = torrent_id
+                return AddResult.SUCCESS
         except requests.RequestException as e:
             print(f"  ✗ Real-Debrid error: {e}")
-        return None
+        return AddResult.FAILED
+
+    def get_pending_torrents(self) -> list[str]:
+        """Get unique torrent IDs added this session."""
+        return list(set(self._torrent_ids.values()))
+
+    def get_torrent_info(self, torrent_id: str) -> Optional[dict]:
+        """Get info about a torrent on Real-Debrid."""
+        try:
+            resp = self.session.get(
+                f"{self.API_BASE}/torrents/info/{torrent_id}",
+                timeout=15,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as e:
+            print(f"  ✗ Error getting torrent info: {e}")
+            return None
+
+    def unrestrict_link(self, link: str) -> Optional[dict]:
+        """Unrestrict a link to get a direct download URL.
+
+        Returns dict with 'download' (URL) and 'filename' keys, or None.
+        """
+        try:
+            resp = self.session.post(
+                f"{self.API_BASE}/unrestrict/link",
+                data={"link": link},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as e:
+            print(f"  ✗ Error unrestricting link: {e}")
+            return None
 
 
 # ─── Magnet File Saver (fallback) ──────────────────────────────────────────────
@@ -264,3 +312,79 @@ class MagnetFileSaver:
             f.write(stream.magnet_link)
 
         return filepath
+
+
+# ─── aria2 Client ──────────────────────────────────────────────────────────────
+
+
+class Aria2Client:
+    """Manages downloads via aria2 JSON-RPC interface.
+
+    aria2 runs on the NAS and downloads Real-Debrid direct links to the
+    media library so Jellyfin can pick them up automatically.
+    """
+
+    def __init__(
+        self,
+        host: str = "http://localhost",
+        port: int = 6800,
+        secret: str = "",
+        download_dir: str = "",
+    ):
+        self.rpc_url = f"{host}:{port}/jsonrpc"
+        self.secret = secret
+        self.download_dir = download_dir
+        self.session = requests.Session()
+
+    def _call(self, method: str, params: Optional[list] = None):
+        """Send a JSON-RPC call to aria2."""
+        if params is None:
+            params = []
+        if self.secret:
+            params = [f"token:{self.secret}"] + params
+
+        payload = {
+            "jsonrpc": "2.0",
+            "id": "torrentdownloader",
+            "method": method,
+            "params": params,
+        }
+        resp = self.session.post(self.rpc_url, json=payload, timeout=10)
+        resp.raise_for_status()
+        result = resp.json()
+        if "error" in result:
+            raise RuntimeError(result["error"].get("message", "Unknown aria2 error"))
+        return result.get("result")
+
+    def test_connection(self) -> bool:
+        """Test if aria2 RPC is reachable."""
+        try:
+            version = self._call("aria2.getVersion")
+            if version:
+                print(f"  ✓ aria2 connected (v{version.get('version', '?')})")
+                return True
+            return False
+        except Exception as e:
+            print(f"  ✗ Cannot connect to aria2: {e}")
+            return False
+
+    def add_download(
+        self,
+        url: str,
+        directory: str = "",
+        filename: str = "",
+    ) -> Optional[str]:
+        """Add a download URL to aria2. Returns the GID or None."""
+        options: dict[str, str] = {}
+        target_dir = directory or self.download_dir
+        if target_dir:
+            options["dir"] = target_dir
+        if filename:
+            options["out"] = filename
+
+        try:
+            gid = self._call("aria2.addUri", [[url], options])
+            return gid
+        except Exception as e:
+            print(f"  ✗ Error adding to aria2: {e}")
+            return None
