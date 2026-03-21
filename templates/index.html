@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TorrentDownloader NAS</title>
+    <!-- AlpineJS -->
+    <script src="//unpkg.com/alpinejs" defer></script>
+    <!-- TailwindCSS -->
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    
+    <!-- Vanta.js Dependencies -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vanta@latest/dist/vanta.net.min.js"></script>
+
+    <style>
+        /* Custom scrollbar to look nice with dark theme */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1f2937; }
+        ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+        
+        /* Glassmorphism for containers */
+        .glass-panel {
+            background: rgba(31, 41, 55, 0.7);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white font-sans antialiased overflow-x-hidden">
+    
+    <!-- Vanta Background Container -->
+    <div id="vanta-bg" class="fixed inset-0 z-0"></div>
+
+    <!-- Main Content -->
+    <div class="relative z-10 container mx-auto p-4 max-w-4xl min-h-screen flex flex-col" x-data="app()" x-init="init()">
+        <header class="mb-6 flex justify-between items-center glass-panel p-4 rounded-lg shadow-lg">
+            <div>
+                <h1 class="text-3xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
+                    🚀 TorrentDownloader
+                </h1>
+                <div class="text-sm text-gray-400">NAS Edition</div>
+            </div>
+            <div class="text-right text-xs text-gray-400">
+                <div x-text="status.config_found ? '✅ Config Loaded' : '❌ Config Missing'"></div>
+                <div x-show="status.clients?.rd" class="text-green-500 font-bold">RD Active</div>
+                <div x-show="!status.clients?.rd" class="text-gray-600">RD Inactive</div>
+            </div>
+        </header>
+
+        <!-- Search Section -->
+        <div class="mb-6 glass-panel p-4 rounded-lg shadow-xl">
+            <form @submit.prevent="search" class="flex gap-2">
+                <input type="text" x-model="query" placeholder="Search movies or series (e.g. 'Fallout')..." 
+                       class="flex-1 p-3 rounded bg-gray-800 bg-opacity-50 border border-gray-600 focus:outline-none focus:border-blue-500 text-white placeholder-gray-400 transition">
+                <button type="submit" class="px-6 py-3 bg-blue-600 rounded font-semibold shadow hover:bg-blue-700 transition transform hover:scale-105">
+                    Search
+                </button>
+            </form>
+        </div>
+
+        <!-- Results Grid -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8" x-show="results.length > 0">
+            <template x-for="item in results" :key="item.imdb_id">
+                <div class="glass-panel p-4 rounded-lg flex justify-between items-center transition hover:border-blue-500 hover:shadow-2xl">
+                    <div class="overflow-hidden">
+                        <h3 class="font-bold text-lg leading-tight truncate" x-text="item.name"></h3>
+                        <div class="text-sm text-gray-300 mt-1">
+                            <span x-text="item.year"></span> • 
+                            <span x-text="item.type?.toUpperCase()" 
+                                  :class="item.type === 'movie' ? 'text-green-400 font-bold' : 'text-purple-400 font-bold'"></span>
+                        </div>
+                    </div>
+                    <button @click="download(item)" 
+                            class="ml-4 px-4 py-2 bg-green-600 rounded text-sm font-bold shadow hover:bg-green-700 transition transform hover:scale-105 whitespace-nowrap">
+                        Download
+                    </button>
+                </div>
+            </template>
+        </div>
+
+        <!-- Logs / Status -->
+        <div class="flex-grow flex flex-col glass-panel rounded-lg shadow-2xl overflow-hidden mb-4">
+            <div class="bg-gray-800 bg-opacity-80 px-4 py-2 text-xs text-gray-400 border-b border-gray-700 flex justify-between items-center">
+                <span>SYSTEM LOGS</span>
+                <button @click="logs = []" class="hover:text-white transition">Clear</button>
+            </div>
+            <div class="p-4 font-mono text-xs md:text-sm h-64 md:h-96 overflow-y-auto" id="log-container">
+                <template x-for="log in logs">
+                    <div class="mb-1 break-words pb-1 border-b border-gray-800 border-opacity-30 last:border-0" 
+                         :class="log.includes('❌') ? 'text-red-400' : (log.includes('✅') ? 'text-green-400 font-semibold' : (log.includes('🚀') ? 'text-blue-400' : 'text-gray-300'))" 
+                         x-text="log"></div>
+                </template>
+                <div x-show="logs.length === 0" class="text-gray-500 italic text-center mt-10">Waiting for tasks...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- App Logic -->
+    <script>
+        function app() {
+            return {
+                query: '',
+                results: [],
+                logs: [],
+                status: {},
+                logInterval: null,
+
+                async init() {
+                    this.fetchStatus();
+                    this.startLogPolling();
+                    
+                    // Initialize Vanta.js
+                    try {
+                        VANTA.NET({
+                          el: "#vanta-bg",
+                          mouseControls: true,
+                          touchControls: true,
+                          gyroControls: false,
+                          minHeight: 200.00,
+                          minWidth: 200.00,
+                          scale: 1.00,
+                          scaleMobile: 1.00,
+                          color: 0x3b82f6,      // Blue-ish node color
+                          backgroundColor: 0x111827, // Matches tailwind bg-gray-900 (#111827)
+                          points: 15.00,
+                          maxDistance: 22.00,
+                          spacing: 16.00
+                        })
+                    } catch (e) {
+                        console.warn("Vanta JS failed to init (Check network for CDN)", e);
+                    }
+                },
+
+                async fetchStatus() {
+                    try {
+                        const res = await fetch('/api/status');
+                        this.status = await res.json();
+                    } catch (e) {
+                        console.error("Status fetch failed", e);
+                    }
+                },
+
+                async search() {
+                    if (!this.query) return;
+                    this.logs.push("[UI] Searching for '" + this.query + "'...");
+                    try {
+                        const res = await fetch(`/api/search?q=${encodeURIComponent(this.query)}`);
+                        this.results = await res.json();
+                    } catch (e) {
+                         this.logs.push("❌ Search failed: " + e);
+                    }
+                },
+
+                async download(item) {
+                    if (!confirm(`Download ${item.name} (${item.year})?`)) return;
+                    
+                    this.logs.push(`[UI] Requesting download for ${item.imdb_id}...`);
+                    try {
+                        await fetch('/api/download', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({imdb_id: item.imdb_id, type: item.type})
+                        });
+                    } catch (e) {
+                        this.logs.push("❌ Request failed: " + e);
+                    }
+                },
+
+                async fetchLogs() {
+                    try {
+                        const res = await fetch('/api/logs');
+                        const newLogs = await res.json();
+                        // Only update if logs changed
+                        if (JSON.stringify(newLogs) !== JSON.stringify(this.logs)) {
+                             this.logs = newLogs;
+                             // Auto scroll only if we were near bottom or if specifically requested?
+                             // Just auto scroll always for now as logs are appending
+                             this.$nextTick(() => {
+                                 const container = document.getElementById('log-container');
+                                 if(container) container.scrollTop = container.scrollHeight;
+                             });
+                        }
+                    } catch (e) {
+                        console.error("Log fetch failed", e);
+                    }
+                },
+
+                startLogPolling() {
+                    if (this.logInterval) return;
+                    this.fetchLogs();
+                    this.logInterval = setInterval(() => {
+                        this.fetchLogs();
+                        if(Math.random() > 0.9) this.fetchStatus(); 
+                    }, 2000);
+                }
+            }
+        }
+    </script>
+</body>
+</html>

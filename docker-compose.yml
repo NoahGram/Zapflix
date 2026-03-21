@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  downloader:
+    build: .
+    container_name: torrent-downloader-web
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config.json:/app/config.json
+      # Mount download directory if saving locally or needing Aria2 to see files
+      # - /mnt/media:/media 
+    environment:
+      - PYTHONUNBUFFERED=1
