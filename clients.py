@@ -1,14 +1,15 @@
 """
-Download clients - handles sending torrents to qBittorrent or Real-Debrid.
+Download clients - handles sending torrents to Real-Debrid and forwarding the
+resulting direct links to aria2 on the NAS.
+
+qBittorrent support was removed — the workflow is Real-Debrid → aria2 only.
 """
 
 import os
-import json
 import time
 import requests
 from enum import Enum
 from typing import Optional
-from dataclasses import dataclass
 
 from torrentio import TorrentStream
 
@@ -16,175 +17,8 @@ from torrentio import TorrentStream
 class AddResult(Enum):
     """Result of attempting to add a torrent."""
     SUCCESS = "success"          # Newly added
-    ALREADY_EXISTS = "exists"    # Same hash already in client (season pack)
+    ALREADY_EXISTS = "exists"    # Same hash already added this session (season pack)
     FAILED = "failed"            # Actual failure
-
-
-# ─── qBittorrent Client ────────────────────────────────────────────────────────
-
-
-class QBittorrentClient:
-    """Manages downloads via qBittorrent Web API."""
-
-    def __init__(
-        self,
-        host: str = "http://localhost",
-        port: int = 8080,
-        username: str = "admin",
-        password: str = "adminadmin",
-        save_path: str = "",
-        category: str = "stremio-series",
-        sequential: bool = True,
-        first_last_priority: bool = True,
-    ):
-        self.base_url = f"{host}:{port}"
-        self.username = username
-        self.password = password
-        self.save_path = save_path
-        self.category = category
-        self.sequential = sequential
-        self.first_last_priority = first_last_priority
-        self.session = requests.Session()
-        self._authenticated = False
-        self._added_hashes: set[str] = set()   # Track hashes added this session
-        self._existing_hashes: set[str] = set()  # Hashes already in qBittorrent
-
-    def login(self) -> bool:
-        """Authenticate with qBittorrent Web API."""
-        try:
-            resp = self.session.post(
-                f"{self.base_url}/api/v2/auth/login",
-                data={"username": self.username, "password": self.password},
-                timeout=10,
-            )
-            if resp.text == "Ok.":
-                self._authenticated = True
-                # Ensure category exists
-                self._ensure_category()
-                # Load existing torrent hashes to detect duplicates
-                self._load_existing_hashes()
-                return True
-            else:
-                print(f"  ✗ qBittorrent login failed: {resp.text}")
-                return False
-        except requests.RequestException as e:
-            print(f"  ✗ Cannot connect to qBittorrent at {self.base_url}: {e}")
-            return False
-
-    def _ensure_category(self):
-        """Create the download category if it doesn't exist."""
-        try:
-            data = {"category": self.category}
-            if self.save_path:
-                data["savePath"] = self.save_path
-            self.session.post(
-                f"{self.base_url}/api/v2/torrents/createCategory",
-                data=data,
-                timeout=10,
-            )
-        except Exception:
-            pass  # Category may already exist
-
-    def _load_existing_hashes(self):
-        """Load info hashes of torrents already in qBittorrent."""
-        try:
-            resp = self.session.get(
-                f"{self.base_url}/api/v2/torrents/info",
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                for t in resp.json():
-                    h = t.get("hash", "").lower()
-                    if h:
-                        self._existing_hashes.add(h)
-        except Exception:
-            pass
-
-    def add_torrent(
-        self,
-        stream: TorrentStream,
-        subfolder: str = "",
-        tags: str = "",
-    ) -> AddResult:
-        """Add a torrent to qBittorrent via magnet link.
-
-        Returns AddResult.ALREADY_EXISTS if the same info hash was already
-        added (common with season packs where every episode shares one torrent).
-        """
-        info_hash = stream.info_hash.lower()
-
-        # Check if this exact hash was already added this session or exists in qBittorrent
-        # Do this BEFORE login attempt so it works even when testing without qBittorrent
-        if info_hash in self._added_hashes or info_hash in self._existing_hashes:
-            return AddResult.ALREADY_EXISTS
-
-        if not self._authenticated:
-            if not self.login():
-                return AddResult.FAILED
-            return AddResult.ALREADY_EXISTS
-
-        magnet = stream.magnet_link
-
-        data = {
-            "urls": magnet,
-            "category": self.category,
-            "sequentialDownload": str(self.sequential).lower(),
-            "firstLastPiecePrio": str(self.first_last_priority).lower(),
-        }
-
-        if subfolder and self.save_path:
-            data["savepath"] = os.path.join(self.save_path, subfolder)
-        elif self.save_path:
-            data["savepath"] = self.save_path
-
-        if tags:
-            data["tags"] = tags
-
-        try:
-            resp = self.session.post(
-                f"{self.base_url}/api/v2/torrents/add",
-                data=data,
-                timeout=15,
-            )
-            if resp.text == "Ok.":
-                self._added_hashes.add(info_hash)
-                return AddResult.SUCCESS
-            elif resp.text == "Fails.":
-                # qBittorrent returns "Fails." for duplicates — re-check
-                self._existing_hashes.add(info_hash)
-                return AddResult.ALREADY_EXISTS
-            else:
-                return AddResult.FAILED
-        except requests.RequestException as e:
-            print(f"  ✗ Error adding torrent: {e}")
-            return AddResult.FAILED
-
-    def get_torrent_list(self, category: Optional[str] = None) -> list[dict]:
-        """Get list of torrents, optionally filtered by category."""
-        if not self._authenticated:
-            if not self.login():
-                return []
-
-        params = {}
-        if category:
-            params["category"] = category
-
-        try:
-            resp = self.session.get(
-                f"{self.base_url}/api/v2/torrents/info",
-                params=params,
-                timeout=10,
-            )
-            return resp.json()
-        except Exception:
-            return []
-
-    def logout(self):
-        """Logout from qBittorrent."""
-        try:
-            self.session.post(f"{self.base_url}/api/v2/auth/logout", timeout=5)
-        except Exception:
-            pass
 
 
 # ─── Real-Debrid Client ────────────────────────────────────────────────────────
@@ -373,8 +207,9 @@ class Aria2Client:
         url: str,
         directory: str = "",
         filename: str = "",
+        retries: int = 3,
     ) -> Optional[str]:
-        """Add a download URL to aria2. Returns the GID or None."""
+        """Add a download URL to aria2 with retry/backoff. Returns the GID or None."""
         options: dict[str, str] = {}
         target_dir = directory or self.download_dir
         if target_dir:
@@ -382,9 +217,27 @@ class Aria2Client:
         if filename:
             options["out"] = filename
 
+        last_err = None
+        for attempt in range(1, retries + 1):
+            try:
+                gid = self._call("aria2.addUri", [[url], options])
+                if gid:
+                    return gid
+            except Exception as e:
+                last_err = e
+                if attempt < retries:
+                    time.sleep(2 ** attempt)  # 2s, 4s, 8s
+        print(f"  ✗ Error adding to aria2 after {retries} attempts: {last_err}")
+        return None
+
+    def tell_status(self, gid: str) -> Optional[dict]:
+        """Return aria2 status for a GID (status, errorMessage, files...)."""
         try:
-            gid = self._call("aria2.addUri", [[url], options])
-            return gid
+            return self._call(
+                "aria2.tellStatus",
+                [gid, ["gid", "status", "errorCode", "errorMessage",
+                       "completedLength", "totalLength", "files"]],
+            )
         except Exception as e:
-            print(f"  ✗ Error adding to aria2: {e}")
+            print(f"  ✗ Error getting aria2 status: {e}")
             return None

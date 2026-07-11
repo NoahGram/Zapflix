@@ -4,196 +4,318 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TorrentDownloader NAS</title>
-    <!-- AlpineJS -->
     <script src="//unpkg.com/alpinejs" defer></script>
-    <!-- TailwindCSS -->
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-    
-    <!-- Vanta.js Dependencies -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/vanta@latest/dist/vanta.net.min.js"></script>
-
     <style>
-        /* Custom scrollbar to look nice with dark theme */
-        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-track { background: #1f2937; }
         ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: #6b7280; }
-        
-        /* Glassmorphism for containers */
         .glass-panel {
-            background: rgba(31, 41, 55, 0.7);
+            background: rgba(31, 41, 55, 0.72);
             backdrop-filter: blur(10px);
             -webkit-backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.08);
         }
+        .poster-card { transition: transform .15s ease, box-shadow .15s ease; }
+        .poster-card:hover { transform: translateY(-4px); box-shadow: 0 12px 30px rgba(0,0,0,.5); }
+        [x-cloak] { display: none !important; }
+        .fade-in { animation: fade .2s ease; }
+        @keyframes fade { from { opacity: 0 } to { opacity: 1 } }
     </style>
 </head>
 <body class="bg-gray-900 text-white font-sans antialiased overflow-x-hidden">
-    
-    <!-- Vanta Background Container -->
     <div id="vanta-bg" class="fixed inset-0 z-0"></div>
 
-    <!-- Main Content -->
-    <div class="relative z-10 container mx-auto p-4 max-w-4xl min-h-screen flex flex-col" x-data="app()" x-init="init()">
+    <div class="relative z-10 container mx-auto p-4 max-w-6xl min-h-screen flex flex-col" x-data="app()" x-init="init()">
+        <!-- Header -->
         <header class="mb-6 flex justify-between items-center glass-panel p-4 rounded-lg shadow-lg">
             <div>
                 <h1 class="text-3xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
                     🚀 TorrentDownloader
                 </h1>
-                <div class="text-sm text-gray-400">NAS Edition</div>
+                <div class="text-sm text-gray-400">NAS Edition · Real-Debrid</div>
             </div>
-            <div class="text-right text-xs text-gray-400">
+            <div class="text-right text-xs text-gray-400 space-y-1">
                 <div x-text="status.config_found ? '✅ Config Loaded' : '❌ Config Missing'"></div>
-                <div x-show="status.clients?.rd" class="text-green-500 font-bold">RD Active</div>
-                <div x-show="!status.clients?.rd" class="text-gray-600">RD Inactive</div>
+                <div :class="status.clients?.rd ? 'text-green-500 font-bold' : 'text-gray-600'"
+                     x-text="status.clients?.rd ? 'RD Active' : 'RD Inactive'"></div>
+                <div :class="status.clients?.aria2 ? 'text-green-500' : 'text-gray-600'"
+                     x-text="status.clients?.aria2 ? 'aria2 → NAS' : 'aria2 off'"></div>
             </div>
         </header>
 
-        <!-- Search Section -->
+        <!-- Search -->
         <div class="mb-6 glass-panel p-4 rounded-lg shadow-xl">
             <form @submit.prevent="search" class="flex gap-2">
-                <input type="text" x-model="query" placeholder="Search movies or series (e.g. 'Fallout')..." 
+                <input type="text" x-model="query" placeholder="Search movies or series (e.g. 'Teen Wolf')..."
                        class="flex-1 p-3 rounded bg-gray-800 bg-opacity-50 border border-gray-600 focus:outline-none focus:border-blue-500 text-white placeholder-gray-400 transition">
-                <button type="submit" class="px-6 py-3 bg-blue-600 rounded font-semibold shadow hover:bg-blue-700 transition transform hover:scale-105">
-                    Search
+                <button type="submit" :disabled="searching"
+                        class="px-6 py-3 bg-blue-600 rounded font-semibold shadow hover:bg-blue-700 transition disabled:opacity-50">
+                    <span x-text="searching ? 'Searching…' : 'Search'"></span>
                 </button>
             </form>
         </div>
 
-        <!-- Results Grid -->
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8" x-show="results.length > 0">
+        <!-- Poster grid -->
+        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 mb-8 fade-in"
+             x-show="results.length > 0 && view === 'catalog'">
             <template x-for="item in results" :key="item.imdb_id">
-                <div class="glass-panel p-4 rounded-lg flex justify-between items-center transition hover:border-blue-500 hover:shadow-2xl">
-                    <div class="overflow-hidden">
-                        <h3 class="font-bold text-lg leading-tight truncate" x-text="item.name"></h3>
-                        <div class="text-sm text-gray-300 mt-1">
-                            <span x-text="item.year"></span> • 
-                            <span x-text="item.type?.toUpperCase()" 
-                                  :class="item.type === 'movie' ? 'text-green-400 font-bold' : 'text-purple-400 font-bold'"></span>
-                        </div>
+                <div @click="openDetail(item)"
+                     class="poster-card cursor-pointer glass-panel rounded-lg overflow-hidden flex flex-col">
+                    <div class="relative bg-gray-800" style="padding-bottom:150%;">
+                        <img :src="item.poster" :alt="item.name" loading="lazy"
+                             @error="$el.src='data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22300%22><rect width=%22200%22 height=%22300%22 fill=%22%23374151%22/></svg>'"
+                             class="absolute inset-0 w-full h-full object-cover">
+                        <span class="absolute top-2 left-2 text-xs font-bold px-2 py-1 rounded"
+                              :class="item.type === 'movie' ? 'bg-green-600' : 'bg-purple-600'"
+                              x-text="item.type?.toUpperCase()"></span>
                     </div>
-                    <button @click="download(item)" 
-                            class="ml-4 px-4 py-2 bg-green-600 rounded text-sm font-bold shadow hover:bg-green-700 transition transform hover:scale-105 whitespace-nowrap">
-                        Download
-                    </button>
+                    <div class="p-2">
+                        <div class="font-semibold text-sm leading-tight truncate" x-text="item.name" :title="item.name"></div>
+                        <div class="text-xs text-gray-400" x-text="item.year"></div>
+                    </div>
                 </div>
             </template>
         </div>
 
-        <!-- Logs / Status -->
-        <div class="flex-grow flex flex-col glass-panel rounded-lg shadow-2xl overflow-hidden mb-4">
+        <!-- Detail view -->
+        <div x-show="view === 'detail'" x-cloak class="mb-8 fade-in">
+            <button @click="closeDetail()" class="mb-3 text-sm text-blue-400 hover:text-blue-300">← Back to results</button>
+            <div class="glass-panel rounded-lg overflow-hidden shadow-2xl">
+                <!-- Backdrop -->
+                <div class="h-40 md:h-56 bg-cover bg-center"
+                     :style="detail.data && detail.data.background ? `background-image:linear-gradient(to top, rgba(17,24,39,1), rgba(17,24,39,.35)), url('${detail.data.background}')` : 'background:#1f2937'"></div>
+                <div class="p-5 -mt-20 relative flex flex-col md:flex-row gap-5">
+                    <img x-show="detail.data && detail.data.poster" :src="detail.data && detail.data.poster"
+                         class="w-32 md:w-44 rounded-lg shadow-lg flex-shrink-0 border border-gray-700">
+                    <div class="flex-1 min-w-0">
+                        <template x-if="detail.loading">
+                            <div class="text-gray-400 mt-16">Loading details…</div>
+                        </template>
+                        <template x-if="!detail.loading && detail.data">
+                            <div>
+                                <h2 class="text-2xl md:text-3xl font-bold" x-text="detail.data.name"></h2>
+                                <div class="flex flex-wrap items-center gap-3 text-sm text-gray-300 mt-1">
+                                    <span x-text="detail.data.year"></span>
+                                    <span x-show="detail.data.rating" class="text-yellow-400 font-bold">★ <span x-text="detail.data.rating"></span></span>
+                                    <span x-show="detail.data.runtime" x-text="detail.data.runtime"></span>
+                                    <span class="text-xs px-2 py-0.5 rounded"
+                                          :class="detail.data.type === 'movie' ? 'bg-green-700' : 'bg-purple-700'"
+                                          x-text="detail.data.type?.toUpperCase()"></span>
+                                </div>
+                                <div class="mt-1 text-xs text-gray-400" x-text="(detail.data.genres||[]).join(' · ')"></div>
+                                <p class="mt-3 text-sm text-gray-300 leading-relaxed max-h-32 overflow-y-auto" x-text="detail.data.description"></p>
+
+                                <!-- Movie: single button -->
+                                <template x-if="detail.data.type === 'movie'">
+                                    <button @click="startDownload()" :disabled="downloading"
+                                            class="mt-4 px-6 py-3 bg-green-600 rounded font-bold shadow hover:bg-green-700 transition disabled:opacity-50">
+                                        <span x-text="downloading ? 'Queued ✓' : '⬇ Download Movie'"></span>
+                                    </button>
+                                </template>
+                            </div>
+                        </template>
+                    </div>
+                </div>
+
+                <!-- Series: season/episode selection -->
+                <template x-if="!detail.loading && detail.data && detail.data.type === 'series'">
+                    <div class="px-5 pb-5">
+                        <div class="flex flex-wrap items-center justify-between gap-2 border-t border-gray-700 pt-4 mb-3">
+                            <div class="flex items-center gap-2">
+                                <button @click="toggleAll(true)" class="text-xs px-3 py-1 bg-gray-700 rounded hover:bg-gray-600">Select all</button>
+                                <button @click="toggleAll(false)" class="text-xs px-3 py-1 bg-gray-700 rounded hover:bg-gray-600">Clear</button>
+                                <span class="text-xs text-gray-400" x-text="selectedCount() + ' episode(s) selected'"></span>
+                            </div>
+                            <button @click="startDownload()" :disabled="downloading || selectedCount()===0"
+                                    class="px-5 py-2 bg-green-600 rounded font-bold shadow hover:bg-green-700 transition disabled:opacity-40">
+                                <span x-text="downloading ? 'Queued ✓' : '⬇ Download selected'"></span>
+                            </button>
+                        </div>
+
+                        <template x-for="s in detail.data.seasons" :key="s.season">
+                            <div class="mb-2 bg-gray-800 bg-opacity-40 rounded">
+                                <div class="flex items-center justify-between px-3 py-2 cursor-pointer" @click="toggleExpand(s.season)">
+                                    <div class="flex items-center gap-2">
+                                        <input type="checkbox" :checked="isSeasonAll(s.season)" @click.stop="toggleSeason(s.season)"
+                                               class="w-4 h-4 accent-green-500">
+                                        <span class="font-semibold text-sm">Season <span x-text="s.season"></span></span>
+                                        <span class="text-xs text-gray-500" x-text="'· ' + s.episodes.length + ' ep'"></span>
+                                    </div>
+                                    <span class="text-gray-400 text-xs" x-text="expanded[s.season] ? '▲' : '▼'"></span>
+                                </div>
+                                <div x-show="expanded[s.season]" class="px-3 pb-3 grid grid-cols-1 sm:grid-cols-2 gap-1">
+                                    <template x-for="ep in s.episodes" :key="ep.episode">
+                                        <label class="flex items-center gap-2 text-xs text-gray-300 py-1 px-2 rounded hover:bg-gray-700 cursor-pointer">
+                                            <input type="checkbox" :checked="isEpisodeSelected(s.season, ep.episode)"
+                                                   @change="toggleEpisode(s.season, ep.episode)" class="w-4 h-4 accent-green-500">
+                                            <span class="text-gray-500" x-text="'E'+String(ep.episode).padStart(2,'0')"></span>
+                                            <span class="truncate" x-text="ep.name" :title="ep.name"></span>
+                                        </label>
+                                    </template>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </template>
+            </div>
+        </div>
+
+        <!-- Logs -->
+        <div class="flex-grow flex flex-col glass-panel rounded-lg shadow-2xl overflow-hidden mb-4 min-h-0">
             <div class="bg-gray-800 bg-opacity-80 px-4 py-2 text-xs text-gray-400 border-b border-gray-700 flex justify-between items-center">
                 <span>SYSTEM LOGS</span>
-                <button @click="logs = []" class="hover:text-white transition">Clear</button>
+                <button @click="clearLogs()" class="hover:text-white transition">Clear</button>
             </div>
-            <div class="p-4 font-mono text-xs md:text-sm h-64 md:h-96 overflow-y-auto" id="log-container">
-                <template x-for="log in logs">
-                    <div class="mb-1 break-words pb-1 border-b border-gray-800 border-opacity-30 last:border-0" 
-                         :class="log.includes('❌') ? 'text-red-400' : (log.includes('✅') ? 'text-green-400 font-semibold' : (log.includes('🚀') ? 'text-blue-400' : 'text-gray-300'))" 
+            <div class="p-4 font-mono text-xs md:text-sm h-64 overflow-y-auto" id="log-container">
+                <template x-for="(log, idx) in logs" :key="idx">
+                    <div class="mb-1 break-words pb-1 border-b border-gray-800 border-opacity-30 last:border-0"
+                         :class="log.includes('❌') ? 'text-red-400' : ((log.includes('✅') || log.includes('🚀') || log.includes('✨')) ? 'text-green-400' : 'text-gray-300')"
                          x-text="log"></div>
                 </template>
-                <div x-show="logs.length === 0" class="text-gray-500 italic text-center mt-10">Waiting for tasks...</div>
+                <div x-show="logs.length === 0" class="text-gray-500 italic text-center mt-10">Waiting for tasks…</div>
             </div>
         </div>
     </div>
 
-    <!-- App Logic -->
     <script>
         function app() {
             return {
-                query: '',
-                results: [],
-                logs: [],
-                status: {},
-                logInterval: null,
+                query: '', results: [], logs: [], status: {}, logInterval: null,
+                searching: false, downloading: false,
+                view: 'catalog',
+                detail: { loading: false, data: null, item: null },
+                selected: {},   // key "season-episode" -> true
+                expanded: {},   // season -> bool
 
                 async init() {
                     this.fetchStatus();
                     this.startLogPolling();
-                    
-                    // Initialize Vanta.js
                     try {
-                        VANTA.NET({
-                          el: "#vanta-bg",
-                          mouseControls: true,
-                          touchControls: true,
-                          gyroControls: false,
-                          minHeight: 200.00,
-                          minWidth: 200.00,
-                          scale: 1.00,
-                          scaleMobile: 1.00,
-                          color: 0x3b82f6,      // Blue-ish node color
-                          backgroundColor: 0x111827, // Matches tailwind bg-gray-900 (#111827)
-                          points: 15.00,
-                          maxDistance: 22.00,
-                          spacing: 16.00
-                        })
-                    } catch (e) {
-                        console.warn("Vanta JS failed to init (Check network for CDN)", e);
-                    }
+                        VANTA.NET({ el: "#vanta-bg", mouseControls: true, touchControls: true,
+                          minHeight: 200, minWidth: 200, scale: 1, scaleMobile: 1,
+                          color: 0x3b82f6, backgroundColor: 0x111827, points: 15, maxDistance: 22, spacing: 16 });
+                    } catch (e) { console.warn("Vanta failed", e); }
                 },
 
                 async fetchStatus() {
-                    try {
-                        const res = await fetch('/api/status');
-                        this.status = await res.json();
-                    } catch (e) {
-                        console.error("Status fetch failed", e);
-                    }
+                    try { this.status = await (await fetch('/api/status')).json(); }
+                    catch (e) { console.error(e); }
                 },
 
                 async search() {
                     if (!this.query) return;
-                    this.logs.push("[UI] Searching for '" + this.query + "'...");
+                    this.searching = true; this.view = 'catalog';
                     try {
                         const res = await fetch(`/api/search?q=${encodeURIComponent(this.query)}`);
-                        this.results = await res.json();
-                    } catch (e) {
-                         this.logs.push("❌ Search failed: " + e);
-                    }
+                        this.results = (await res.json()).filter(r => r.type !== 'error');
+                    } catch (e) { this.pushLog("❌ Search failed: " + e); }
+                    this.searching = false;
                 },
 
-                async download(item) {
-                    if (!confirm(`Download ${item.name} (${item.year})?`)) return;
-                    
-                    this.logs.push(`[UI] Requesting download for ${item.imdb_id}...`);
+                async openDetail(item) {
+                    this.view = 'detail';
+                    this.detail = { loading: true, data: null, item };
+                    this.selected = {}; this.expanded = {};
+                    try {
+                        const res = await fetch(`/api/meta/${item.type}/${item.imdb_id}`);
+                        const data = await res.json();
+                        this.detail.data = data;
+                        if (data.type === 'series') {
+                            this.toggleAll(true);   // default: everything selected
+                            if (data.seasons && data.seasons.length) this.expanded[data.seasons[0].season] = true;
+                        }
+                    } catch (e) { this.pushLog("❌ Failed to load details: " + e); }
+                    this.detail.loading = false;
+                },
+
+                closeDetail() { this.view = 'catalog'; this.detail = { loading: false, data: null, item: null }; },
+
+                toggleExpand(s) { this.expanded[s] = !this.expanded[s]; },
+
+                key(s, e) { return s + '-' + e; },
+                isEpisodeSelected(s, e) { return !!this.selected[this.key(s, e)]; },
+
+                toggleEpisode(s, e) {
+                    const k = this.key(s, e);
+                    if (this.selected[k]) delete this.selected[k]; else this.selected[k] = true;
+                    this.selected = { ...this.selected };
+                },
+
+                seasonObj(s) { return this.detail.data.seasons.find(x => x.season === s); },
+                isSeasonAll(s) {
+                    const so = this.seasonObj(s); if (!so) return false;
+                    return so.episodes.every(ep => this.isEpisodeSelected(s, ep.episode));
+                },
+                toggleSeason(s) {
+                    const so = this.seasonObj(s); if (!so) return;
+                    const all = this.isSeasonAll(s);
+                    so.episodes.forEach(ep => {
+                        const k = this.key(s, ep.episode);
+                        if (all) delete this.selected[k]; else this.selected[k] = true;
+                    });
+                    this.selected = { ...this.selected };
+                },
+                toggleAll(on) {
+                    this.selected = {};
+                    if (on && this.detail.data && this.detail.data.seasons) {
+                        this.detail.data.seasons.forEach(so =>
+                            so.episodes.forEach(ep => this.selected[this.key(so.season, ep.episode)] = true));
+                    }
+                    this.selected = { ...this.selected };
+                },
+                selectedCount() { return Object.keys(this.selected).length; },
+
+                buildSelection() {
+                    if (this.detail.data.type === 'movie') return null;
+                    const bySeason = {};
+                    Object.keys(this.selected).forEach(k => {
+                        const parts = k.split('-').map(Number);
+                        const s = parts[0], e = parts[1];
+                        (bySeason[s] = bySeason[s] || []).push(e);
+                    });
+                    return Object.keys(bySeason).map(s => ({ season: Number(s), episodes: bySeason[s].sort((a,b)=>a-b) }));
+                },
+
+                async startDownload() {
+                    const d = this.detail.data; if (!d) return;
+                    if (d.type === 'series' && this.selectedCount() === 0) return;
+                    this.downloading = true;
+                    const selection = this.buildSelection();
+                    this.pushLog(`[UI] Requesting download for ${d.name}…`);
                     try {
                         await fetch('/api/download', {
-                            method: 'POST',
-                            headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify({imdb_id: item.imdb_id, type: item.type})
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ imdb_id: d.imdb_id, type: d.type, selection })
                         });
-                    } catch (e) {
-                        this.logs.push("❌ Request failed: " + e);
-                    }
+                    } catch (e) { this.pushLog("❌ Request failed: " + e); }
+                    setTimeout(() => this.downloading = false, 2500);
                 },
+
+                pushLog(m) { this.logs.push(m); },
+                clearLogs() { this.logs = []; },
 
                 async fetchLogs() {
                     try {
-                        const res = await fetch('/api/logs');
-                        const newLogs = await res.json();
-                        // Only update if logs changed
+                        const newLogs = await (await fetch('/api/logs')).json();
                         if (JSON.stringify(newLogs) !== JSON.stringify(this.logs)) {
-                             this.logs = newLogs;
-                             // Auto scroll only if we were near bottom or if specifically requested?
-                             // Just auto scroll always for now as logs are appending
-                             this.$nextTick(() => {
-                                 const container = document.getElementById('log-container');
-                                 if(container) container.scrollTop = container.scrollHeight;
-                             });
+                            this.logs = newLogs;
+                            this.$nextTick(() => {
+                                const c = document.getElementById('log-container');
+                                if (c) c.scrollTop = c.scrollHeight;
+                            });
                         }
-                    } catch (e) {
-                        console.error("Log fetch failed", e);
-                    }
+                    } catch (e) { console.error(e); }
                 },
-
                 startLogPolling() {
                     if (this.logInterval) return;
                     this.fetchLogs();
                     this.logInterval = setInterval(() => {
                         this.fetchLogs();
-                        if(Math.random() > 0.9) this.fetchStatus(); 
+                        if (Math.random() > 0.9) this.fetchStatus();
                     }, 2000);
                 }
             }

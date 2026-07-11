@@ -1,6 +1,6 @@
 requests>=2.31.0
-qbittorrent-api>=2024.1.59
 rich>=13.7.0
+python-dotenv>=1.0.0
 
 fastapi
 uvicorn

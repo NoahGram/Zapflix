@@ -94,6 +94,8 @@ def search_series(query: str) -> list[dict]:
                 "name": meta.get("name", "Unknown"),
                 "year": meta.get("releaseInfo", meta.get("year", "?")),
                 "type": "series",
+                "poster": meta.get("poster", ""),
+                "background": meta.get("background", ""),
             }
         )
     return results
@@ -117,6 +119,8 @@ def search_movies(query: str) -> list[dict]:
                 "name": meta.get("name", "Unknown"),
                 "year": meta.get("releaseInfo", meta.get("year", "?")),
                 "type": "movie",
+                "poster": meta.get("poster", ""),
+                "background": meta.get("background", ""),
             }
         )
     return results
@@ -198,6 +202,57 @@ def get_series_metadata(imdb_id: str) -> Series:
         seasons=seasons,
         total_episodes=total,
     )
+
+
+def get_meta(content_type: str, imdb_id: str) -> Optional[dict]:
+    """Fetch rich display metadata for the detail view.
+
+    Returns a JSON-friendly dict with poster/background/plot/rating/genres and,
+    for series, the season -> episode structure. Returns None on failure.
+    """
+    ctype = "series" if content_type == "series" else "movie"
+    url = f"{CINEMETA_BASE}/meta/{ctype}/{imdb_id}.json"
+    try:
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        meta = resp.json().get("meta", {})
+    except Exception:
+        return None
+
+    result = {
+        "imdb_id": imdb_id,
+        "type": ctype,
+        "name": meta.get("name", "Unknown"),
+        "year": meta.get("releaseInfo", meta.get("year", "?")),
+        "poster": meta.get("poster", ""),
+        "background": meta.get("background", ""),
+        "description": meta.get("description", ""),
+        "rating": meta.get("imdbRating", ""),
+        "genres": meta.get("genres") or meta.get("genre") or [],
+        "runtime": meta.get("runtime", ""),
+    }
+
+    if ctype == "series":
+        seasons: dict[int, list[dict]] = {}
+        for video in meta.get("videos", []):
+            season = video.get("season")
+            episode_num = video.get("episode") or video.get("number")
+            if season is None or episode_num is None or season == 0:
+                continue
+            seasons.setdefault(int(season), []).append({
+                "season": int(season),
+                "episode": int(episode_num),
+                "name": video.get("name") or video.get("title", f"Episode {episode_num}"),
+                "overview": video.get("overview", ""),
+            })
+        for s in seasons:
+            seasons[s].sort(key=lambda e: e["episode"])
+        # Emit as a sorted list of {season, episodes:[...]}
+        result["seasons"] = [
+            {"season": s, "episodes": seasons[s]} for s in sorted(seasons.keys())
+        ]
+
+    return result
 
 
 def get_movie_metadata(imdb_id: str) -> Movie:

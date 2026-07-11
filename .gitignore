@@ -10,6 +10,9 @@ build/
 # Config with secrets (use config.example.json as template)
 config.json
 
+# Environment secrets (use .env.example as template)
+.env
+
 # Downloaded magnets
 magnets/
 

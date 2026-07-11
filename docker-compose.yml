@@ -10,6 +10,8 @@ services:
     volumes:
       - ./config.json:/app/config.json
       # Mount download directory if saving locally or needing Aria2 to see files
-      # - /mnt/media:/media 
+      # - /mnt/media:/media
+    env_file:
+      - .env
     environment:
       - PYTHONUNBUFFERED=1

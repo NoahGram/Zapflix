@@ -1,181 +1,122 @@
 # TorrentDownloader
 
-Bulk download entire TV series from Stremio/Torrentio — no more manually selecting sources episode by episode.
+Search for a movie or series, click download, and it lands on your NAS — via
+**Real-Debrid** (cloud caching) + **aria2** (NAS downloader), ready for Jellyfin.
 
 ## How It Works
 
-1. **Search** for a series by name or IMDB ID (uses Stremio's Cinemeta metadata)
-2. **Fetch** available torrent streams from Torrentio for every episode
-3. **Send** the best matching magnet links to **qBittorrent** (or Real-Debrid)
-4. **Sit back** while everything downloads automatically
+1. **Search** a title (Stremio's Cinemeta metadata → posters, plot, rating).
+2. **Pick** it — for series, choose which seasons/episodes you want.
+3. **Torrentio** (configured with your Real-Debrid key) returns streams, marking
+   which are already **cached** on Real-Debrid (`[RD+]`).
+4. **Deliver**:
+   - *Cached* streams resolve straight to a Real-Debrid direct link → **aria2**
+     pulls them to the NAS instantly (no waiting, no failures).
+   - *Uncached* streams are added to Real-Debrid to download, then synced to
+     aria2 when ready.
+
+Real-Debrid is the only supported client (qBittorrent was removed).
 
 ## Setup
 
 ### 1. Install dependencies
 
 ```bash
-cd TorrentDownloader
 pip install -r requirements.txt
 ```
 
-### 2. Configure
+### 2. Secrets — `.env`
 
-Edit `config.json`:
+Copy `.env.example` to `.env` and fill it in (`.env` is gitignored):
 
-```jsonc
-{
-    "torrentio": {
-        "base_url": "https://torrentio.strem.fun",
-        "config": "",                    // Your Torrentio config string (see below)
-        "preferred_quality": ["1080p", "720p"],
-        "exclude_keywords": ["cam", "hdcam", "telesync"],
-        "max_results_per_episode": 5
-    },
-    "qbittorrent": {
-        "host": "http://localhost",
-        "port": 8080,
-        "username": "admin",
-        "password": "adminadmin",       // Change this!
-        "save_path": "/path/to/downloads",  // Leave empty for qBittorrent default
-        "category": "stremio-series",
-        "sequential_download": true,
-        "first_last_piece_priority": true
-    },
-    "real_debrid": {
-        "enabled": false,               // Set to true to use Real-Debrid
-        "api_key": ""                   // Get from https://real-debrid.com/apitoken
-    },
-    "download": {
-        "delay_between_episodes": 2,    // Seconds between API requests
-        "delay_between_seasons": 5,
-        "auto_select_best": true,
-        "dry_run": false
-    }
-}
+```ini
+RD_API_KEY=your_real_debrid_key            # https://real-debrid.com/apitoken
+TORRENTIO_CONFIG=sort=qualitysize|realdebrid=your_real_debrid_key
+ARIA2_HOST=http://YOUR_NAS_IP
+ARIA2_PORT=6800
+ARIA2_SECRET=your_aria2_rpc_secret
+ARIA2_DOWNLOAD_DIR=/downloads
 ```
 
-### 3. qBittorrent Setup
+Environment variables override `config.json`, so secrets stay out of committed
+files. Non-secret settings (quality, delays, profile) live in `config.json`
+(copy from `config.example.json`).
 
-Make sure qBittorrent's Web UI is enabled:
-- **Tools → Options → Web UI**
-- Check "Web User Interface (Remote control)"
-- Set port (default 8080) and credentials
-- Update `config.json` with matching values
+### 3. Torrentio config string (important)
 
-### 4. Torrentio Config String (Optional)
+The `[RD+]` cached detection and instant links **require** your Real-Debrid key
+baked into the Torrentio config:
 
-If you use custom Torrentio filters:
-1. Go to [torrentio.strem.fun](https://torrentio.strem.fun)
-2. Configure your preferred settings (providers, quality, etc.)
-3. Copy the config string from the URL (the part after `torrentio.strem.fun/`)
-4. Paste it into `config.json` under `torrentio.config`
+1. Go to [torrentio.strem.fun/configure](https://torrentio.strem.fun/configure),
+   pick **Real-Debrid** and enter your key.
+2. Copy the path segment between the host and `/manifest.json`.
+3. Put it in `TORRENTIO_CONFIG` (e.g. `sort=qualitysize|realdebrid=<key>`).
 
-Example: if your URL is `https://torrentio.strem.fun/sort=qualitysize|qualityfilter=480p,scr,cam/manifest.json`,
-then your config string is `sort=qualitysize|qualityfilter=480p,scr,cam`.
+> Note: requests use a browser User-Agent — Cloudflare blocks non-browser
+> User-Agents on debrid-configured Torrentio requests.
 
-## Usage
+## Run
 
+### Web UI (recommended)
 
-### Enter Python Virtual Environment
 ```bash
-source /home/noah/Repositories/TorrentDownloader/.venv/bin/activate
+python web_server.py           # or: uvicorn web_server:app --host 0.0.0.0 --port 8000
 ```
 
-### Interactive mode (recommended for first use)
+Open `http://localhost:8000` — search, open a title, pick episodes, download.
+
+### Docker
 
 ```bash
-python download.py
+docker compose up --build -d
 ```
 
-### Search by name
+`docker-compose.yml` reads `.env` and mounts `config.json`.
+
+### CLI
 
 ```bash
-python download.py --search "Breaking Bad"
-```
-
-### Download by IMDB ID
-
-```bash
-# Find the IMDB ID from https://www.imdb.com (it's in the URL)
-python download.py --imdb tt0903747
-```
-
-### Download specific seasons
-
-```bash
-# Single season
-python download.py --imdb tt0903747 --season 1
-
-# Season range
+python download.py --imdb tt0903747            # by IMDB id
+python download.py --search "Breaking Bad"     # search
+python download.py --imdb tt0903747 --dry-run  # preview
 python download.py --imdb tt0903747 --season 2-4
-
-# All seasons (default)
-python download.py --imdb tt0903747 --season all
 ```
 
-### Preview without downloading (dry run)
+## Web API
 
-```bash
-python download.py --imdb tt0903747 --dry-run
-```
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/search?q=` | Search movies + series (posters, year, type) |
+| `GET /api/meta/{type}/{imdb_id}` | Full metadata + season/episode list |
+| `POST /api/download` | `{imdb_id, type, selection?}` — queue a download |
+| `GET /api/logs` | Recent server logs (UI polls this) |
+| `GET /api/status` | Config + client (RD / aria2) status |
 
-### Manually pick each stream
-
-```bash
-python download.py --imdb tt0903747 --manual
-```
-
-### Prefer a specific quality
-
-```bash
-python download.py --imdb tt0903747 --quality 720p 480p
-```
-
-### Save magnet links to files (no torrent client needed)
-
-```bash
-python download.py --imdb tt0903747 --save-magnets
-```
-
-### Use Real-Debrid
-
-Set `real_debrid.enabled` to `true` and add your API key in `config.json`, then run normally.
-The script will add magnets to your Real-Debrid cloud instead of qBittorrent.
-
-## All CLI Options
-
-| Flag | Description |
-|------|-------------|
-| `--imdb ID` | IMDB ID of the series (e.g., `tt0903747`) |
-| `--search QUERY` | Search for a series by name |
-| `--season RANGE` | Season(s): `1`, `2-5`, or `all` |
-| `--quality Q [Q...]` | Preferred quality order (e.g., `1080p 720p`) |
-| `--dry-run` | Preview without downloading |
-| `--manual` | Manually select stream per episode |
-| `--save-magnets` | Save .magnet files instead of using a client |
-| `--torrentio-config` | Override Torrentio config string |
-| `--config PATH` | Path to alternate config.json |
-
-## Quality Flags
-![alt text](images/image.png)
+`selection` is `"all"` (or omitted) for everything, or
+`[{"season": 1, "episodes": [1,2,3]}, ...]` for specific episodes.
 
 ## File Structure
 
 ```
 TorrentDownloader/
-├── download.py        # Main CLI entry point
-├── cinemeta.py        # Series metadata fetcher (Stremio Cinemeta API)
-├── torrentio.py       # Torrent stream fetcher (Torrentio addon API)
-├── clients.py         # Download clients (qBittorrent, Real-Debrid, magnet saver)
-├── config.json        # Configuration
-├── requirements.txt   # Python dependencies
-└── README.md
+├── web_server.py      # FastAPI web UI + REST API
+├── backend.py         # Orchestration: Torrentio → RD → aria2 (+ env config)
+├── download.py        # CLI entry point
+├── cinemeta.py        # Metadata (Cinemeta): search, get_meta
+├── torrentio.py       # Torrentio streams + [RD+] cached parsing + selection
+├── clients.py         # RealDebridClient, Aria2Client, MagnetFileSaver
+├── profiles.py        # Quality profiles / scoring
+├── templates/         # Web UI (poster catalog + detail + episode picker)
+├── config.json        # Non-secret config (gitignored)
+├── .env               # Secrets (gitignored)
+└── requirements.txt
 ```
 
 ## Tips
 
-- **First run**: Use `--dry-run` to preview what would be downloaded
-- **Old/niche series**: If auto-select picks bad sources, use `--manual` mode
-- **Rate limiting**: The script waits between requests to avoid getting blocked. You can adjust `delay_between_episodes` in config
-- **Sequential download**: Enabled by default in qBittorrent so you can start watching sooner
-- **Resume**: If interrupted, just run again — qBittorrent will skip torrents it already has
+- **Prefer cached**: selection strongly prefers `[RD+]` streams — instant and
+  reliable — and only falls back to uncached torrents when nothing is cached.
+- **Long series**: for a whole season, a detected season pack covers the season
+  in one torrent, and Torrentio queries are rate-limited to avoid throttling.
+- **aria2**: files are foldered as `<Title>/Season NN/` for Jellyfin.
+```

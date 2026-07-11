@@ -35,7 +35,7 @@ from cinemeta import (
     Episode, Series, Movie,
 )
 from torrentio import TorrentioClient, TorrentStream
-from clients import QBittorrentClient, RealDebridClient, MagnetFileSaver, Aria2Client, AddResult
+from clients import RealDebridClient, MagnetFileSaver, Aria2Client, AddResult
 from profiles import QualityProfile, get_profile, list_profiles, load_custom_profile, PROFILES
 
 console = Console()
@@ -140,37 +140,21 @@ def interactive_search() -> tuple[str, str]:
 
 
 def _init_download_client(config: dict, dry_run: bool, fallback_name: str = "media"):
-    """Initialize the download client based on config. Returns the client."""
+    """Initialize the download client based on config. Returns the client.
+
+    Real-Debrid only; falls back to saving magnet files if RD is unavailable.
+    """
     rd_config = config.get("real_debrid", {})
-    qb_config = config.get("qbittorrent", {})
 
-    use_rd = rd_config.get("enabled", False) and rd_config.get("api_key")
-
-    if use_rd:
+    if rd_config.get("enabled", False) and rd_config.get("api_key"):
         client = RealDebridClient(api_key=rd_config["api_key"])
-        if not client.test_connection():
-            console.print("[red]Real-Debrid connection failed. Falling back to qBittorrent.[/red]")
-            use_rd = False
+        if dry_run or client.test_connection():
+            return client
+        console.print("[red]Real-Debrid connection failed.[/red]")
 
-    if not use_rd:
-        client = QBittorrentClient(
-            host=qb_config.get("host", "http://localhost"),
-            port=qb_config.get("port", 8080),
-            username=qb_config.get("username", "admin"),
-            password=qb_config.get("password", "adminadmin"),
-            save_path=qb_config.get("save_path", ""),
-            category=qb_config.get("category", "stremio-series"),
-            sequential=qb_config.get("sequential_download", True),
-            first_last_priority=qb_config.get("first_last_piece_priority", True),
-        )
-        if not dry_run and not client.login():
-            console.print("[red]Cannot connect to qBittorrent. Check config.json.[/red]")
-            if Confirm.ask("Save magnet links to files instead?", default=True):
-                client = MagnetFileSaver(output_dir=f"magnets/{fallback_name}")
-            else:
-                sys.exit(1)
-
-    return client
+    if Confirm.ask("Save magnet links to files instead?", default=True):
+        return MagnetFileSaver(output_dir=f"magnets/{fallback_name}")
+    sys.exit(1)
 
 
 def _init_aria2_client(config: dict):
@@ -368,19 +352,7 @@ def run_movie_download(
         )
     else:
         ok = False
-        if isinstance(client, QBittorrentClient):
-            result = client.add_torrent(
-                selected, subfolder=safe_name, tags=movie.name,
-            )
-            if result == AddResult.SUCCESS:
-                console.print(f"  [green]✓ Added to downloads[/green]")
-                ok = True
-            elif result == AddResult.ALREADY_EXISTS:
-                console.print(f"  [cyan]↳ Already in downloads[/cyan]")
-                ok = True
-            else:
-                console.print(f"  [red]✗ Failed to add[/red]")
-        elif isinstance(client, RealDebridClient):
+        if isinstance(client, RealDebridClient):
             result = client.add_magnet(selected)
             if result in (AddResult.SUCCESS, AddResult.ALREADY_EXISTS):
                 console.print(f"  [green]✓ Added to Real-Debrid[/green]")
@@ -394,9 +366,6 @@ def run_movie_download(
 
         status = "[green]✓ Added: 1[/green]" if ok else "[red]✗ Failed: 1[/red]"
         console.print(Panel(f"{status} | Total: 1", title="📊 Download Summary"))
-
-        if isinstance(client, QBittorrentClient):
-            client.logout()
 
         # Sync Real-Debrid downloads to NAS via aria2
         if ok and isinstance(client, RealDebridClient) and not dry_run:
@@ -551,13 +520,7 @@ def run_download(
 
             result = AddResult.FAILED
 
-            if isinstance(client, QBittorrentClient):
-                result = client.add_torrent(
-                    selected,
-                    subfolder=subfolder,
-                    tags=f"{series.name},S{ep.season:02d}",
-                )
-            elif isinstance(client, RealDebridClient):
+            if isinstance(client, RealDebridClient):
                 result = client.add_magnet(selected)
             elif isinstance(client, MagnetFileSaver):
                 path = client.save(selected, series.name, ep.label)
@@ -624,10 +587,6 @@ def run_download(
             title="📊 Download Summary",
         )
     )
-
-    # Cleanup
-    if isinstance(client, QBittorrentClient):
-        client.logout()
 
     # Sync Real-Debrid downloads to NAS via aria2
     if isinstance(client, RealDebridClient) and success > 0 and not dry_run:
@@ -836,7 +795,6 @@ Examples:
 
     # Override to magnet saver if requested
     if args.save_magnets:
-        config["qbittorrent"] = {}
         config["real_debrid"] = {"enabled": False}
 
     auto_select = not args.manual and config.get("download", {}).get("auto_select_best", True)
