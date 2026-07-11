@@ -9,7 +9,7 @@ import collections
 import time
 
 from cinemeta import search_all, get_meta
-from backend import process_download_task, load_config
+from backend import process_download_task, load_config, VERSION
 
 app = FastAPI(title="TorrentDownloader Web")
 
@@ -75,6 +75,7 @@ async def status():
     config = load_config()
     return {
         "status": "online",
+        "version": VERSION,
         "config_found": bool(config),
         "clients": {
             "rd": bool(config.get("real_debrid", {}).get("enabled") and config.get("real_debrid", {}).get("api_key")),

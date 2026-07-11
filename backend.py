@@ -19,6 +19,10 @@ from profiles import QualityProfile
 logger = logging.getLogger("TorrentDownloader")
 logger.setLevel(logging.INFO)
 
+# Bump on every release — shown in the UI header, /api/status, and task logs
+# so a stale Docker image is immediately obvious.
+VERSION = "1.2.0"
+
 CONFIG_FILE = Path(__file__).parent / "config.json"
 
 # Load .env once at import so env vars are available to load_config().
@@ -228,7 +232,7 @@ def process_download_task(
 ):
     """Background task to handle the full download process."""
     try:
-        log_callback(f"🚀 Starting background download for {imdb_id} ({type})...")
+        log_callback(f"🚀 Starting background download for {imdb_id} ({type})... [v{VERSION}]")
 
         config = load_config()
         if not config:
@@ -312,9 +316,12 @@ def process_download_task(
             sent_resolves: set[str] = set()
             cached_sent = 0
             rd_queued = 0
+            pack_covered = 0
+            no_stream = 0
 
             for i, ep in enumerate(episodes):
                 if ep.season in covered_seasons:
+                    pack_covered += 1
                     continue
 
                 streams = torrentio.get_streams(ep)
@@ -325,6 +332,7 @@ def process_download_task(
 
                 if not selected:
                     log_callback(f"⚠️ No stream for {ep.label}")
+                    no_stream += 1
                     continue
 
                 pack_seasons = _pack_seasons(selected, ep.season)
@@ -334,6 +342,7 @@ def process_download_task(
                     # This torrent is already queued on RD (a pack) — the sync
                     # stage will deliver its files, so skip the covered seasons.
                     covered_seasons |= pack_seasons
+                    pack_covered += 1
                     continue
 
                 if pack_seasons:
@@ -365,7 +374,11 @@ def process_download_task(
                 covered_hashes.add(selected.info_hash)
                 rd_queued += 1
 
-            log_callback(f"📋 Cached sent to aria2: {cached_sent} | Torrents queued on RD: {rd_queued}")
+            summary = (f"📋 {len(episodes)} episode(s): {cached_sent} sent directly to aria2 | "
+                       f"{rd_queued} torrent(s) queued on RD | {pack_covered} covered by packs")
+            if no_stream:
+                summary += f" | ⚠️ {no_stream} with no stream"
+            log_callback(summary)
 
             # Packs and uncached torrents are delivered by the sync stage
             if aria2_client and rd_queued:
