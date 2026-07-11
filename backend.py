@@ -127,20 +127,42 @@ def resolve_direct_link(resolve_url: str, timeout: int = 60) -> Optional[str]:
     return None
 
 
-def _is_season_pack(stream: TorrentStream, season: int) -> bool:
-    """Heuristic: does this stream cover a whole season (not one episode)?"""
-    text = f"{stream.title} {stream.filename}".lower()
-    if re.search(rf"s0*{season}\s*e\d+\s*[-–~]\s*e?\d+", text):
-        return True
-    if re.search(r"e\d+\s*[-–~]\s*e?\d+", text):
-        return True
-    if "complete" in text or "full season" in text:
-        return True
-    if re.search(rf"season\s*0*{season}\b", text):
-        return True
-    if re.search(rf"s0*{season}\b", text) and not re.search(rf"s0*{season}e\d+", text):
-        return True
-    return False
+def _pack_seasons(stream: TorrentStream, season: int) -> set[int]:
+    """Which whole seasons does this stream's torrent cover? Empty = single episode.
+
+    Only the torrent name (first line of the Torrentio title) is inspected —
+    the filename always names a single episode file even inside packs, and
+    episode *titles* can be numeric (e.g. "S04E02 - 117") which fooled looser
+    heuristics.
+    """
+    name = stream.title.split("\n")[0].lower()
+    seasons: set[int] = set()
+
+    # Multi-season ranges: "s01-s06", "season 1-6", "seasons 1 to 6"
+    for m in re.finditer(r"s(\d{1,2})\s*[-–~]\s*s(\d{1,2})", name):
+        a, b = int(m.group(1)), int(m.group(2))
+        if 0 < a <= b <= 60:
+            seasons.update(range(a, b + 1))
+    for m in re.finditer(r"seasons?\s*(\d{1,2})\s*(?:[-–~]|to)\s*(\d{1,2})", name):
+        a, b = int(m.group(1)), int(m.group(2))
+        if 0 < a <= b <= 60:
+            seasons.update(range(a, b + 1))
+
+    # Episode-range pack within this season: "S02E01-E12" (require the E on
+    # both sides — "S04E02 - 117" must NOT match)
+    if re.search(rf"s0*{season}\s*e\d+\s*[-–~]\s*e\d+", name):
+        seasons.add(season)
+    # Whole-season pack: "Season 2" / "S02" with no single-episode marker
+    elif re.search(rf"(?:seasons?\s*0*{season}|s0*{season})\b", name) and \
+            not re.search(rf"s0*{season}\s*e\d+", name):
+        seasons.add(season)
+
+    # "complete"/"full season" with no parsable numbers: cover at least this
+    # season (later seasons re-match the same hash and get covered then)
+    if not seasons and ("complete" in name or "full season" in name):
+        seasons.add(season)
+
+    return seasons
 
 
 def _filter_episodes(series: Series, selection) -> List[Episode]:
@@ -287,8 +309,9 @@ def process_download_task(
 
             covered_hashes: set[str] = set()
             covered_seasons: set[int] = set()
+            sent_resolves: set[str] = set()
             cached_sent = 0
-            uncached_added = 0
+            rd_queued = 0
 
             for i, ep in enumerate(episodes):
                 if ep.season in covered_seasons:
@@ -304,40 +327,49 @@ def process_download_task(
                     log_callback(f"⚠️ No stream for {ep.label}")
                     continue
 
-                is_pack = _is_season_pack(selected, ep.season)
+                pack_seasons = _pack_seasons(selected, ep.season)
+                cache_tag = "⚡RD+ " if selected.cached else ""
 
                 if selected.info_hash in covered_hashes:
-                    if is_pack:
-                        covered_seasons.add(ep.season)
+                    # This torrent is already queued on RD (a pack) — the sync
+                    # stage will deliver its files, so skip the covered seasons.
+                    covered_seasons |= pack_seasons
                     continue
-                covered_hashes.add(selected.info_hash)
-                if is_pack:
-                    covered_seasons.add(ep.season)
 
-                cache_tag = "⚡RD+ " if selected.cached else ""
-                pack_tag = " [season pack]" if is_pack else ""
+                if pack_seasons:
+                    # Multi-episode pack: the resolve fast-path would fetch only
+                    # ONE file, so always go through RD (instant when cached) —
+                    # the sync stage delivers every file in the pack.
+                    label = ", ".join(f"S{s:02d}" for s in sorted(pack_seasons))
+                    log_callback(f"📦 {ep.label}: {cache_tag}pack covers {label} "
+                                 f"({selected.quality}, {selected.size}) — adding to RD")
+                    rd_client.add_magnet(selected)
+                    covered_hashes.add(selected.info_hash)
+                    covered_seasons |= pack_seasons
+                    rd_queued += 1
+                    continue
 
-                # Fast path: cached + aria2 -> instant direct link, no RD polling
+                # Single-episode torrent, cached: instant direct link to aria2
                 if aria2_client and selected.cached and selected.resolve_url:
+                    if selected.resolve_url in sent_resolves:
+                        continue
                     if _deliver_cached(selected, aria2_client, base_dir, series.name, "series", log_callback):
-                        log_callback(f"⬇️ {ep.label}: {cache_tag}{selected.quality} ({selected.size}){pack_tag}")
+                        log_callback(f"⬇️ {ep.label}: {cache_tag}{selected.quality} ({selected.size})")
+                        sent_resolves.add(selected.resolve_url)
                         cached_sent += 1
-                        if is_pack:
-                            log_callback(f"📦 Season {ep.season} covered by pack — skipping remaining queries")
                         continue
 
-                # Fallback: uncached (or resolve failed) -> add magnet for RD to download
-                log_callback(f"⬇️ {ep.label}: adding {cache_tag}{selected.quality} ({selected.size}){pack_tag} to RD")
+                # Uncached (or resolve failed): add magnet for RD to download
+                log_callback(f"⬇️ {ep.label}: adding {cache_tag}{selected.quality} ({selected.size}) to RD")
                 rd_client.add_magnet(selected)
-                uncached_added += 1
-                if is_pack:
-                    log_callback(f"📦 Season {ep.season} covered by pack — skipping remaining queries")
+                covered_hashes.add(selected.info_hash)
+                rd_queued += 1
 
-            log_callback(f"📋 Cached sent to aria2: {cached_sent} | Queued on RD: {uncached_added}")
+            log_callback(f"📋 Cached sent to aria2: {cached_sent} | Torrents queued on RD: {rd_queued}")
 
-            # Only the uncached (add_magnet'd) torrents need RD polling + sync
-            if aria2_client and uncached_added:
-                log_callback("⏳ Waiting for RD to download uncached torrents & syncing to aria2...")
+            # Packs and uncached torrents are delivered by the sync stage
+            if aria2_client and rd_queued:
+                log_callback("⏳ Syncing RD torrents to aria2 (instant for cached packs)...")
                 sync_rd_to_aria2(rd_client, aria2_client, series.name, "series", config, log_callback)
 
         log_callback("✨ Task completed!")
