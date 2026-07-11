@@ -8,6 +8,8 @@
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/vanta@latest/dist/vanta.net.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vanta@latest/dist/vanta.clouds.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vanta@latest/dist/vanta.cells.min.js"></script>
     <style>
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-track { background: #1f2937; }
@@ -190,15 +192,52 @@
                 detail: { loading: false, data: null, item: null },
                 selected: {},   // key "season-episode" -> true
                 expanded: {},   // season -> bool
+                backgrounds: ['net', 'clouds', 'cells'],
+                currentBg: null, vantaEffect: null, bgTimer: null,
 
                 async init() {
                     this.fetchStatus();
                     this.startLogPolling();
+                    this.startBackgroundRoulette();
+                },
+
+                // ── Background roulette (Vanta.js) ─────────────────────────
+                pickBackground(exclude) {
+                    const pool = this.backgrounds.filter(b => b !== exclude);
+                    return pool[Math.floor(Math.random() * pool.length)];
+                },
+
+                setBackground(name) {
                     try {
-                        VANTA.NET({ el: "#vanta-bg", mouseControls: true, touchControls: true,
-                          minHeight: 200, minWidth: 200, scale: 1, scaleMobile: 1,
-                          color: 0x3b82f6, backgroundColor: 0x111827, points: 15, maxDistance: 22, spacing: 16 });
+                        if (this.vantaEffect) { this.vantaEffect.destroy(); this.vantaEffect = null; }
+                        const common = { el: "#vanta-bg", mouseControls: true, touchControls: true,
+                                         gyroControls: false, minHeight: 200, minWidth: 200,
+                                         scale: 1, scaleMobile: 1 };
+                        if (name === 'clouds') {
+                            // Night-sky tuning to match the dark theme
+                            this.vantaEffect = VANTA.CLOUDS({ ...common,
+                                backgroundColor: 0x111827, skyColor: 0x0b1226,
+                                cloudColor: 0x1e293b, cloudShadowColor: 0x070b14,
+                                sunColor: 0x1d4ed8, sunGlareColor: 0x2563eb,
+                                sunlightColor: 0x1e40af, speed: 0.8 });
+                        } else if (name === 'cells') {
+                            this.vantaEffect = VANTA.CELLS({ ...common,
+                                color1: 0x111827, color2: 0x1d4ed8,
+                                size: 2.5, speed: 1.0 });
+                        } else {
+                            this.vantaEffect = VANTA.NET({ ...common,
+                                color: 0x3b82f6, backgroundColor: 0x111827,
+                                points: 15, maxDistance: 22, spacing: 16 });
+                        }
+                        this.currentBg = name;
                     } catch (e) { console.warn("Vanta failed", e); }
+                },
+
+                startBackgroundRoulette() {
+                    this.setBackground(this.pickBackground());          // random on load
+                    this.bgTimer = setInterval(
+                        () => this.setBackground(this.pickBackground(this.currentBg)),  // always switch
+                        30 * 60 * 1000);                                // every 30 minutes
                 },
 
                 async fetchStatus() {
