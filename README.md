@@ -17,6 +17,9 @@ Search for a movie or series, click download, and it lands on your NAS — via
 
 Real-Debrid is the only supported client (qBittorrent was removed).
 
+> 📖 **New install?** Follow the step-by-step [INSTALL.md](INSTALL.md) — covers
+> PC, generic servers, and a full UGREEN NAS (Docker) walkthrough incl. aria2.
+
 ## Setup
 
 ### 1. Install dependencies
