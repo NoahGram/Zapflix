@@ -21,7 +21,11 @@ logger.setLevel(logging.INFO)
 
 # Bump on every release — shown in the UI header, /api/status, and task logs
 # so a stale Docker image is immediately obvious.
-VERSION = "1.2.0"
+VERSION = "1.3.0"
+
+# Matches real episode files: "S01E02", "s1e2", or "01x08" style markers.
+# Anything without one (gag reels, VFX breakdowns...) is pack bonus content.
+_EPISODE_RE = re.compile(r"[Ss]\d{1,2}\s*[Ee]\d{1,3}|\b\d{1,2}x\d{2,3}\b")
 
 CONFIG_FILE = Path(__file__).parent / "config.json"
 
@@ -414,6 +418,7 @@ def sync_rd_to_aria2(rd_client, aria2_client, content_name, start_type, config, 
         sent_links: set[str] = set()
         total_sent = 0
         total_failed = 0
+        skipped_extras = 0
 
         for tid in pending:
             start = time.time()
@@ -457,6 +462,16 @@ def sync_rd_to_aria2(rd_client, aria2_client, content_name, start_type, config, 
                     continue
 
                 fname = item.get("filename", "unknown")
+
+                # Series: only deliver real episodes. Season packs bundle bonus
+                # content (gag reels, VFX breakdowns...) whose names carry no
+                # episode marker — they'd clutter the library and same-named
+                # files from different seasons would overwrite each other.
+                if start_type == "series" and not _EPISODE_RE.search(fname):
+                    sent_links.add(link)
+                    skipped_extras += 1
+                    continue
+
                 subdir = _target_subdir(base_dir, content_name, start_type, fname)
 
                 gid = aria2_client.add_download(item["download"], directory=subdir, filename=fname)
@@ -471,6 +486,8 @@ def sync_rd_to_aria2(rd_client, aria2_client, content_name, start_type, config, 
                 time.sleep(0.5)
 
         summary = f"✅ Sent {total_sent} file(s) to aria2"
+        if skipped_extras:
+            summary += f" | ⏭️ {skipped_extras} extra/bonus file(s) skipped"
         if total_failed:
             summary += f" | ❌ {total_failed} failed"
         log_callback(summary)

@@ -8,8 +8,11 @@ import uvicorn
 import collections
 import time
 
+import os
+
 from cinemeta import search_all, get_meta
 from backend import process_download_task, load_config, VERSION
+from clients import Aria2Client
 
 app = FastAPI(title="TorrentDownloader Web")
 
@@ -69,6 +72,41 @@ async def start_download(req: DownloadRequest, background_tasks: BackgroundTasks
 @app.get("/api/logs")
 async def get_logs():
     return list(logs)
+
+@app.get("/api/downloads")
+async def downloads():
+    """Live aria2 download list for the UI's Downloads panel."""
+    config = load_config()
+    a_cfg = config.get("aria2", {})
+    if not a_cfg.get("enabled"):
+        return []
+    client = Aria2Client(
+        host=a_cfg.get("host", "http://localhost"),
+        port=a_cfg.get("port", 6800),
+        secret=a_cfg.get("secret", ""),
+    )
+    out = []
+    for d in client.list_downloads():
+        total = int(d.get("totalLength", 0) or 0)
+        done = int(d.get("completedLength", 0) or 0)
+        speed = int(d.get("downloadSpeed", 0) or 0)
+        files = d.get("files") or []
+        path = files[0].get("path", "") if files else ""
+        out.append({
+            "gid": d.get("gid"),
+            "name": os.path.basename(path) or d.get("gid"),
+            "status": d.get("status"),
+            "total": total,
+            "done": done,
+            "progress": round(done * 100 / total, 1) if total else 0,
+            "speed": speed,
+            "eta": round((total - done) / speed) if speed > 0 and total > done else None,
+            "error": d.get("errorMessage") or None,
+        })
+    # Active first, then queued, then finished/failed
+    order = {"active": 0, "waiting": 1, "paused": 2, "error": 3, "complete": 4, "removed": 5}
+    out.sort(key=lambda x: order.get(x["status"], 9))
+    return out
 
 @app.get("/api/status")
 async def status():

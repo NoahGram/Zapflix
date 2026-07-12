@@ -241,3 +241,19 @@ class Aria2Client:
         except Exception as e:
             print(f"  ✗ Error getting aria2 status: {e}")
             return None
+
+    def list_downloads(self, max_stopped: int = 40) -> list[dict]:
+        """List active, waiting, and recently finished downloads.
+
+        Feeds the web UI's Downloads panel. Returns [] if aria2 is unreachable.
+        """
+        keys = ["gid", "status", "completedLength", "totalLength",
+                "downloadSpeed", "errorMessage", "files"]
+        items: list[dict] = []
+        try:
+            items += self._call("aria2.tellActive", [keys]) or []
+            items += self._call("aria2.tellWaiting", [0, 200, keys]) or []
+            items += self._call("aria2.tellStopped", [0, max_stopped, keys]) or []
+        except Exception as e:
+            print(f"  ✗ Error listing aria2 downloads: {e}")
+        return items

@@ -168,6 +168,41 @@
             </div>
         </div>
 
+        <!-- NAS Downloads (aria2) -->
+        <div class="mb-6 glass-panel rounded-lg shadow-2xl overflow-hidden" x-show="downloads.length > 0" x-cloak>
+            <div class="bg-gray-800 bg-opacity-80 px-4 py-2 text-xs text-gray-400 border-b border-gray-700 flex justify-between items-center">
+                <span>NAS DOWNLOADS <span class="text-gray-600">· aria2</span></span>
+                <span>
+                    <span class="text-blue-400" x-text="countBy('active') + ' active'"></span>
+                    <span class="text-yellow-400 ml-2" x-show="countBy('waiting')" x-text="countBy('waiting') + ' queued'"></span>
+                    <span class="text-green-500 ml-2" x-show="countBy('complete')" x-text="countBy('complete') + ' done'"></span>
+                    <span class="text-red-400 ml-2" x-show="countBy('error')" x-text="countBy('error') + ' failed'"></span>
+                </span>
+            </div>
+            <div class="p-3 space-y-2 max-h-80 overflow-y-auto">
+                <template x-for="d in downloads" :key="d.gid">
+                    <div class="text-xs">
+                        <div class="flex justify-between items-center gap-3">
+                            <span class="truncate text-gray-200" x-text="d.name" :title="d.name"></span>
+                            <span class="whitespace-nowrap text-gray-400">
+                                <template x-if="d.status === 'active'">
+                                    <span><span x-text="fmtBytes(d.speed) + '/s'"></span> · <span x-text="fmtEta(d.eta)"></span></span>
+                                </template>
+                                <span x-show="d.status === 'waiting'" class="text-yellow-400">queued</span>
+                                <span x-show="d.status === 'complete'" class="text-green-500">✓ <span x-text="fmtBytes(d.total)"></span></span>
+                                <span x-show="d.status === 'error'" class="text-red-400" :title="d.error">✗ failed</span>
+                            </span>
+                        </div>
+                        <div class="h-1.5 bg-gray-700 bg-opacity-60 rounded mt-1 overflow-hidden">
+                            <div class="h-full rounded transition-all duration-500"
+                                 :class="d.status === 'error' ? 'bg-red-500' : (d.status === 'complete' ? 'bg-green-500' : 'bg-blue-500')"
+                                 :style="'width:' + Math.max(d.progress, 2) + '%'"></div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+
         <!-- Logs -->
         <div class="flex-grow flex flex-col glass-panel rounded-lg shadow-2xl overflow-hidden mb-4 min-h-0">
             <div class="bg-gray-800 bg-opacity-80 px-4 py-2 text-xs text-gray-400 border-b border-gray-700 flex justify-between items-center">
@@ -189,6 +224,7 @@
         function app() {
             return {
                 query: '', results: [], logs: [], status: {}, logInterval: null,
+                downloads: [],
                 searching: false, downloading: false,
                 view: 'catalog',
                 detail: { loading: false, data: null, item: null },
@@ -339,6 +375,27 @@
                 pushLog(m) { this.logs.push(m); },
                 clearLogs() { this.logs = []; },
 
+                // ── NAS downloads panel (aria2) ─────────────────────────────
+                async fetchDownloads() {
+                    try {
+                        this.downloads = await (await fetch('/api/downloads')).json();
+                    } catch (e) { /* aria2 unreachable — keep last known list */ }
+                },
+                countBy(status) { return this.downloads.filter(d => d.status === status).length; },
+                fmtBytes(n) {
+                    if (!n && n !== 0) return '?';
+                    const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+                    let i = 0; n = Number(n);
+                    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+                    return n.toFixed(n >= 100 || i === 0 ? 0 : 1) + ' ' + u[i];
+                },
+                fmtEta(s) {
+                    if (s == null) return '…';
+                    if (s < 60) return s + 's';
+                    if (s < 3600) return Math.floor(s / 60) + 'm ' + (s % 60) + 's';
+                    return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm';
+                },
+
                 async fetchLogs() {
                     try {
                         const newLogs = await (await fetch('/api/logs')).json();
@@ -354,8 +411,10 @@
                 startLogPolling() {
                     if (this.logInterval) return;
                     this.fetchLogs();
+                    this.fetchDownloads();
                     this.logInterval = setInterval(() => {
                         this.fetchLogs();
+                        this.fetchDownloads();
                         if (Math.random() > 0.9) this.fetchStatus();
                     }, 2000);
                 }
