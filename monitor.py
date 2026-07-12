@@ -21,7 +21,8 @@ from typing import Callable, Optional
 
 from backend import (DATA_DIR, load_config, process_download_task,
                      resume_pending_deliveries, sweep_aria2_errors,
-                     register_task, finish_task, TaskCancelled)
+                     auto_retry_failures, register_task, finish_task,
+                     TaskCancelled)
 from cinemeta import get_series_metadata
 
 MONITORED_FILE = DATA_DIR / "monitored.json"
@@ -137,6 +138,7 @@ def check_all(log_callback: Callable[[str], None] = lambda m: None) -> Optional[
         try:
             resume_pending_deliveries(log_callback)
             sweep_aria2_errors(log_callback)
+            auto_retry_failures(log_callback)
         except Exception as e:
             log_callback(f"⚠️ Delivery reconcile failed: {e}")
 

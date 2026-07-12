@@ -17,7 +17,7 @@ from backend import (process_download_task, load_config, VERSION,
                      list_failures, remove_failure, retry_failure,
                      register_task, finish_task, cancel_task, list_tasks,
                      get_editable_config, update_editable_config,
-                     build_library_index)
+                     build_library_index, get_history)
 from monitor import (list_monitored, add_monitored, remove_monitored,
                      note_grabbed, check_all, monitor_loop)
 from clients import Aria2Client
@@ -148,6 +148,11 @@ def library():
     """Everything Zapflix has delivered — for ✓ in-library UI badges."""
     return build_library_index()
 
+@app.get("/api/history")
+def history():
+    """Chronological delivery history (persisted in the journal)."""
+    return get_history()
+
 @app.get("/api/tasks")
 def tasks():
     """Currently running download/monitor tasks."""
@@ -240,6 +245,7 @@ def status():
         "clients": {
             "rd": bool(config.get("real_debrid", {}).get("enabled") and config.get("real_debrid", {}).get("api_key")),
             "aria2": bool(a_cfg.get("enabled")),
+            "jellyfin": bool(config.get("jellyfin", {}).get("host") and config.get("jellyfin", {}).get("api_key")),
         },
         "library": {
             "folders": a_cfg.get("library_folders", []),
