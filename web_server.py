@@ -10,13 +10,14 @@ import time
 
 import os
 
-from cinemeta import search_all, get_meta
+from cinemeta import search_all, get_meta, get_catalog
 import threading
 
 from backend import (process_download_task, load_config, VERSION,
                      list_failures, remove_failure, retry_failure,
                      register_task, finish_task, cancel_task, list_tasks,
-                     get_editable_config, update_editable_config)
+                     get_editable_config, update_editable_config,
+                     build_library_index)
 from monitor import (list_monitored, add_monitored, remove_monitored,
                      note_grabbed, check_all, monitor_loop)
 from clients import Aria2Client
@@ -127,6 +128,25 @@ def downloads():
     order = {"active": 0, "waiting": 1, "paused": 2, "error": 3, "complete": 4, "removed": 5}
     out.sort(key=lambda x: order.get(x["status"], 9))
     return out
+
+# Discover catalog cache: Cinemeta trending barely changes hour to hour
+_discover_cache: dict = {"ts": 0, "data": None}
+
+@app.get("/api/discover")
+def discover():
+    """Trending movies + series for the home screen (cached 30 min)."""
+    now = time.time()
+    if _discover_cache["data"] is not None and now - _discover_cache["ts"] < 1800:
+        return _discover_cache["data"]
+    data = {"movies": get_catalog("movie"), "series": get_catalog("series")}
+    if data["movies"] or data["series"]:
+        _discover_cache.update(ts=now, data=data)
+    return data
+
+@app.get("/api/library")
+def library():
+    """Everything Zapflix has delivered — for ✓ in-library UI badges."""
+    return build_library_index()
 
 @app.get("/api/tasks")
 def tasks():
