@@ -23,7 +23,7 @@ logger.setLevel(logging.INFO)
 
 # Bump on every release — shown in the UI header, /api/status, and task logs
 # so a stale Docker image is immediately obvious.
-VERSION = "1.9.0"
+VERSION = "1.10.0"
 
 # Matches real episode files: "S01E02", "s1e2", or "01x08" style markers.
 # Anything without one (gag reels, VFX breakdowns...) is pack bonus content.
@@ -83,6 +83,12 @@ def _env_overlay(config: dict) -> dict:
         aria2["secret"] = os.getenv("ARIA2_SECRET")
     if os.getenv("ARIA2_DOWNLOAD_DIR"):
         aria2["download_dir"] = os.getenv("ARIA2_DOWNLOAD_DIR")
+
+    jf = config.setdefault("jellyfin", {})
+    if os.getenv("JELLYFIN_HOST"):
+        jf["host"] = os.getenv("JELLYFIN_HOST")
+    if os.getenv("JELLYFIN_API_KEY"):
+        jf["api_key"] = os.getenv("JELLYFIN_API_KEY")
 
     return config
 
@@ -227,6 +233,74 @@ def _target_subdir(base_dir: str, content_name: str, start_type: str, fname: str
     return os.path.join(base_dir, content_name, s_dir)
 
 
+# ─── Failure auto-retry & delivery history ─────────────────────────────────────
+
+def auto_retry_failures(log_callback: Callable[[str], None] = lambda m: None,
+                        max_attempts: int = 5, min_age: int = 1800):
+    """Retry pending failures automatically (called each monitoring pass).
+
+    Only entries that failed ≥ min_age seconds ago and have fewer than
+    max_attempts auto-retries are touched — transient errors self-heal,
+    persistent ones stop burning API calls and wait for the manual button.
+    """
+    now = time.time()
+    pending = [f for f in list_failures()
+               if f.get("attempts", 0) < max_attempts and now - f.get("ts", 0) >= min_age]
+    if not pending:
+        return
+    log_callback(f"🔁 Auto-retrying {len(pending)} failed file(s)...")
+    recovered = 0
+    for f in pending:
+        ok, _ = retry_failure(f["id"], log_callback)
+        if ok:
+            recovered += 1
+        time.sleep(1)
+    log_callback(f"🔁 Auto-retry done — {recovered}/{len(pending)} recovered.")
+
+
+def get_history(limit: int = 200) -> list[dict]:
+    """Chronological list of everything delivered, from the journal."""
+    with _deliveries_lock:
+        sent = _read_deliveries().get("sent", {})
+    items = [{"ts": r.get("ts", 0), "fname": r.get("fname", ""),
+              "content_name": r.get("content_name", ""), "type": r.get("type", ""),
+              "folder": r.get("folder")}
+             for r in sent.values() if r.get("gid")]
+    return sorted(items, key=lambda x: -x["ts"])[:limit]
+
+
+# ─── Jellyfin library scan ─────────────────────────────────────────────────────
+
+_last_jellyfin_scan = 0.0
+
+
+def trigger_jellyfin_scan(config: dict, log_callback: Callable[[str], None] = lambda m: None):
+    """Ask Jellyfin to rescan its libraries so new files appear immediately.
+
+    No-op unless jellyfin.host + api_key are configured (JELLYFIN_HOST /
+    JELLYFIN_API_KEY in .env). Debounced to once a minute — deliveries come
+    in bursts and one scan covers them all.
+    """
+    global _last_jellyfin_scan
+    jf = config.get("jellyfin", {})
+    host = (jf.get("host") or "").rstrip("/")
+    key = jf.get("api_key") or ""
+    if not host or not key:
+        return
+    if time.time() - _last_jellyfin_scan < 60:
+        return
+    try:
+        r = requests.post(f"{host}/Library/Refresh",
+                          headers={"X-Emby-Token": key}, timeout=10)
+        if r.status_code in (200, 204):
+            _last_jellyfin_scan = time.time()
+            log_callback("🪼 Jellyfin library scan triggered")
+        else:
+            log_callback(f"⚠️ Jellyfin scan failed: HTTP {r.status_code}")
+    except Exception as e:
+        log_callback(f"⚠️ Jellyfin scan failed: {e}")
+
+
 # ─── Library index (what Zapflix has delivered) ────────────────────────────────
 
 def build_library_index() -> dict:
@@ -269,6 +343,7 @@ EDITABLE_CONFIG: dict[str, dict[str, type]] = {
               "default_series_folder": str, "poll_timeout": float},
     "download": {"delay_between_episodes": float},
     "monitoring": {"check_interval_hours": float},
+    "jellyfin": {"host": str},  # API key stays in .env (JELLYFIN_API_KEY)
 }
 
 
@@ -481,7 +556,8 @@ def record_failure(content_name: str, start_type: str, rd_link: str,
         items = _read_failures()
         for it in items:
             if it.get("rd_link") == rd_link:  # same file failing again
-                it.update(ts=int(time.time()), reason=reason)
+                it.update(ts=int(time.time()), reason=reason,
+                          attempts=it.get("attempts", 0) + 1)
                 break
         else:
             items.append({
@@ -538,6 +614,7 @@ def retry_failure(fid: str, log_callback: Callable[[str], None] = lambda m: None
         record_sent(entry["rd_link"], gid, fname, entry["content_name"],
                     entry["type"], entry.get("folder"))
         log_callback(f"🔁 Retry OK — sent to aria2: {fname}")
+        trigger_jellyfin_scan(config, log_callback)
         return True, f"Sent to aria2: {fname}"
 
     record_failure(entry["content_name"], entry["type"], entry["rd_link"],
@@ -639,6 +716,7 @@ def process_download_task(
             # Fast path: cached stream + aria2 -> instant direct link
             if aria2_client and selected.cached and selected.resolve_url:
                 if _deliver_cached(selected, aria2_client, base_dir, content_name, "movie", log_callback, folder):
+                    trigger_jellyfin_scan(config, log_callback)
                     log_callback("✨ Task completed!")
                     return {"type": "movie", "delivered": True}
                 log_callback("↳ Cached fast-path failed, falling back to RD download...")
@@ -650,6 +728,7 @@ def process_download_task(
             if aria2_client:
                 log_callback("⏳ Waiting for RD to cache...")
                 sync_rd_to_aria2(rd_client, aria2_client, content_name, "movie", config, log_callback, base_dir, folder, cancel)
+                trigger_jellyfin_scan(config, log_callback)
             log_callback("✨ Task completed!")
             return {"type": "movie", "delivered": True}
 
@@ -742,6 +821,8 @@ def process_download_task(
                 log_callback("⏳ Syncing RD torrents to aria2 (instant for cached packs)...")
                 sync_rd_to_aria2(rd_client, aria2_client, series.name, "series", config, log_callback, base_dir, folder, cancel)
 
+            if cached_sent or rd_queued:
+                trigger_jellyfin_scan(config, log_callback)
             log_callback("✨ Task completed!")
             # Outcome per selected episode — the monitor uses this to update
             # its ledger (grabbed = reached any delivery path; no-stream ones
@@ -932,6 +1013,7 @@ def resume_pending_deliveries(log_callback: Callable[[str], None] = lambda m: No
             mark_torrent_done(tid)
         if sent:
             log_callback(f"🧷 Recovered {sent} file(s) from '{t.get('content_name', '?')}'")
+            trigger_jellyfin_scan(config, log_callback)
 
 
 def sweep_aria2_errors(log_callback: Callable[[str], None] = lambda m: None):

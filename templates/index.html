@@ -49,6 +49,7 @@
                          x-text="status.clients?.rd ? 'RD Active' : 'RD Inactive'"></div>
                     <div :class="status.clients?.aria2 ? 'text-green-500' : 'text-gray-600'"
                          x-text="status.clients?.aria2 ? 'aria2 → NAS' : 'aria2 off'"></div>
+                    <div x-show="status.clients?.jellyfin" class="text-green-500">Jellyfin sync</div>
                 </div>
                 <button @click="openSettings()" title="Settings"
                         class="text-2xl hover:rotate-45 transition-transform duration-300">⚙️</button>
@@ -406,6 +407,12 @@
                                    class="w-full p-2 rounded bg-gray-800 border border-gray-600 focus:outline-none focus:border-blue-500">
                         </div>
                     </div>
+                    <div>
+                        <label class="block text-xs text-gray-400 mb-1">Jellyfin host (for automatic library scans after deliveries)</label>
+                        <input x-model="settings.form.jellyfin_host" placeholder="http://192.168.178.35:8096"
+                               class="w-full p-2 rounded bg-gray-800 border border-gray-600 focus:outline-none focus:border-blue-500">
+                        <p class="text-xs text-gray-600 mt-1">Also set <code>JELLYFIN_API_KEY</code> in <code>.env</code> (Jellyfin → Dashboard → API Keys).</p>
+                    </div>
                     <p class="text-xs text-gray-500">Secrets (Real-Debrid key, aria2 secret…) live in <code>.env</code> and can't be edited here.
                         Changes apply from the next download — no restart needed.</p>
                     <div class="flex justify-end gap-2 pt-1">
@@ -422,16 +429,34 @@
         <!-- Logs -->
         <div class="flex-grow flex flex-col glass-panel rounded-lg shadow-2xl overflow-hidden mb-4 min-h-0">
             <div class="bg-gray-800 bg-opacity-80 px-4 py-2 text-xs text-gray-400 border-b border-gray-700 flex justify-between items-center">
-                <span>SYSTEM LOGS</span>
-                <button @click="clearLogs()" class="hover:text-white transition">Clear</button>
+                <span class="space-x-3">
+                    <button @click="bottomTab = 'logs'" class="transition"
+                            :class="bottomTab === 'logs' ? 'text-white font-bold' : 'hover:text-white'">SYSTEM LOGS</button>
+                    <button @click="bottomTab = 'history'; fetchHistory()" class="transition"
+                            :class="bottomTab === 'history' ? 'text-white font-bold' : 'hover:text-white'">📜 HISTORY</button>
+                </span>
+                <button x-show="bottomTab === 'logs'" @click="clearLogs()" class="hover:text-white transition">Clear</button>
+                <span x-show="bottomTab === 'history'" class="text-gray-600" x-text="historyList.length + ' delivered'"></span>
             </div>
-            <div class="p-4 font-mono text-xs md:text-sm h-64 overflow-y-auto" id="log-container">
+            <div x-show="bottomTab === 'logs'" class="p-4 font-mono text-xs md:text-sm h-64 overflow-y-auto" id="log-container">
                 <template x-for="(log, idx) in logs" :key="idx">
                     <div class="mb-1 break-words pb-1 border-b border-gray-800 border-opacity-30 last:border-0"
                          :class="log.includes('❌') ? 'text-red-400' : ((log.includes('✅') || log.includes('🚀') || log.includes('✨')) ? 'text-green-400' : 'text-gray-300')"
                          x-text="log"></div>
                 </template>
                 <div x-show="logs.length === 0" class="text-gray-500 italic text-center mt-10">Waiting for tasks…</div>
+            </div>
+            <div x-show="bottomTab === 'history'" x-cloak class="p-4 text-xs md:text-sm h-64 overflow-y-auto">
+                <template x-for="(h, idx) in historyList" :key="idx">
+                    <div class="flex items-center gap-2 mb-1 pb-1 border-b border-gray-800 border-opacity-30 last:border-0">
+                        <span x-text="h.type === 'movie' ? '🎬' : '📺'"></span>
+                        <span class="text-gray-500 whitespace-nowrap" x-text="new Date(h.ts * 1000).toLocaleString()"></span>
+                        <span class="font-semibold text-gray-200 whitespace-nowrap" x-text="h.content_name"></span>
+                        <span class="truncate text-gray-400" x-text="h.fname" :title="h.fname"></span>
+                        <span x-show="h.folder" class="ml-auto text-gray-600 whitespace-nowrap" x-text="'📁 ' + h.folder"></span>
+                    </div>
+                </template>
+                <div x-show="historyList.length === 0" class="text-gray-500 italic text-center mt-10">Nothing delivered yet.</div>
             </div>
         </div>
     </div>
@@ -444,6 +469,7 @@
                 monitored: [], destFolder: '', tasks: [],
                 discover: { movies: [], series: [] },
                 library: { movies: [], series: {} },
+                bottomTab: 'logs', historyList: [],
                 settings: { open: false, saving: false, form: {} },
                 searching: false, downloading: false,
                 view: 'catalog',
@@ -608,6 +634,13 @@
                 },
                 countBy(status) { return this.downloads.filter(d => d.status === status).length; },
 
+                // ── Delivery history ────────────────────────────────────────
+                async fetchHistory() {
+                    try {
+                        this.historyList = await (await fetch('/api/history')).json();
+                    } catch (e) { /* keep last known list */ }
+                },
+
                 // ── Discover & library badges ───────────────────────────────
                 async fetchDiscover() {
                     try {
@@ -674,6 +707,7 @@
                             poll_timeout: c.aria2?.poll_timeout ?? 900,
                             delay_between_episodes: c.download?.delay_between_episodes ?? 1.5,
                             check_interval_hours: c.monitoring?.check_interval_hours ?? 6,
+                            jellyfin_host: c.jellyfin?.host || '',
                         };
                         this.settings.open = true;
                     } catch (e) { this.pushLog('❌ Could not load settings: ' + e); }
@@ -694,6 +728,7 @@
                                          poll_timeout: f.poll_timeout },
                                 download: { delay_between_episodes: f.delay_between_episodes },
                                 monitoring: { check_interval_hours: f.check_interval_hours },
+                                jellyfin: { host: f.jellyfin_host },
                             })
                         })).json();
                         this.pushLog((res.ok ? '⚙️ ' : '❌ ') + res.message);
