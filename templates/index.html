@@ -80,10 +80,39 @@
                         <span class="absolute top-2 left-2 text-xs font-bold px-2 py-1 rounded"
                               :class="item.type === 'movie' ? 'bg-green-600' : 'bg-purple-600'"
                               x-text="item.type?.toUpperCase()"></span>
+                        <span x-show="inLibrary(item)" title="Already delivered by Zapflix"
+                              class="absolute top-2 right-2 text-xs font-bold px-2 py-1 rounded bg-green-500 text-gray-900">✓</span>
                     </div>
                     <div class="p-2">
                         <div class="font-semibold text-sm leading-tight truncate" x-text="item.name" :title="item.name"></div>
                         <div class="text-xs text-gray-400" x-text="item.year"></div>
+                    </div>
+                </div>
+            </template>
+        </div>
+
+        <!-- Discover (home screen when nothing searched) -->
+        <div x-show="view === 'catalog' && results.length === 0" x-cloak class="mb-8 fade-in">
+            <template x-for="section in [{title: '🔥 Trending Movies', items: discover.movies}, {title: '📺 Trending Series', items: discover.series}]" :key="section.title">
+                <div class="mb-8" x-show="section.items.length > 0">
+                    <h2 class="text-lg font-bold mb-3 text-gray-200" x-text="section.title"></h2>
+                    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                        <template x-for="item in section.items.slice(0, 10)" :key="item.imdb_id">
+                            <div @click="openDetail(item)"
+                                 class="poster-card cursor-pointer glass-panel rounded-lg overflow-hidden flex flex-col">
+                                <div class="relative bg-gray-800" style="padding-bottom:150%;">
+                                    <img :src="item.poster" :alt="item.name" loading="lazy"
+                                         @error="$el.src='data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22300%22><rect width=%22200%22 height=%22300%22 fill=%22%23374151%22/></svg>'"
+                                         class="absolute inset-0 w-full h-full object-cover">
+                                    <span x-show="inLibrary(item)" title="Already delivered by Zapflix"
+                                          class="absolute top-2 right-2 text-xs font-bold px-2 py-1 rounded bg-green-500 text-gray-900">✓</span>
+                                </div>
+                                <div class="p-2">
+                                    <div class="font-semibold text-sm leading-tight truncate" x-text="item.name" :title="item.name"></div>
+                                    <div class="text-xs text-gray-400" x-text="item.year"></div>
+                                </div>
+                            </div>
+                        </template>
                     </div>
                 </div>
             </template>
@@ -145,6 +174,9 @@
                         <div class="flex flex-wrap items-center justify-between gap-2 border-t border-gray-700 pt-4 mb-3">
                             <div class="flex items-center gap-2">
                                 <button @click="toggleAll(true)" class="text-xs px-3 py-1 bg-gray-700 rounded hover:bg-gray-600">Select all</button>
+                                <button @click="selectMissing()" x-show="seriesInLibrary()"
+                                        class="text-xs px-3 py-1 bg-gray-700 rounded hover:bg-gray-600"
+                                        title="Select only episodes Zapflix hasn't delivered yet">Select missing</button>
                                 <button @click="toggleAll(false)" class="text-xs px-3 py-1 bg-gray-700 rounded hover:bg-gray-600">Clear</button>
                                 <span class="text-xs text-gray-400" x-text="selectedCount() + ' episode(s) selected'"></span>
                             </div>
@@ -187,7 +219,10 @@
                                             <input type="checkbox" :checked="isEpisodeSelected(s.season, ep.episode)"
                                                    @change="toggleEpisode(s.season, ep.episode)" class="w-4 h-4 accent-green-500">
                                             <span class="text-gray-500" x-text="'E'+String(ep.episode).padStart(2,'0')"></span>
-                                            <span class="truncate" x-text="ep.name" :title="ep.name"></span>
+                                            <span class="truncate" :class="epInLibrary(s.season, ep.episode) && 'text-green-400'"
+                                                  x-text="ep.name" :title="ep.name"></span>
+                                            <span x-show="epInLibrary(s.season, ep.episode)" class="text-green-500 ml-auto"
+                                                  title="Already delivered by Zapflix">✓</span>
                                         </label>
                                     </template>
                                 </div>
@@ -407,6 +442,8 @@
                 query: '', results: [], logs: [], status: {}, logInterval: null,
                 downloads: [], failures: [], retrying: false,
                 monitored: [], destFolder: '', tasks: [],
+                discover: { movies: [], series: [] },
+                library: { movies: [], series: {} },
                 settings: { open: false, saving: false, form: {} },
                 searching: false, downloading: false,
                 view: 'catalog',
@@ -571,6 +608,42 @@
                 },
                 countBy(status) { return this.downloads.filter(d => d.status === status).length; },
 
+                // ── Discover & library badges ───────────────────────────────
+                async fetchDiscover() {
+                    try {
+                        this.discover = await (await fetch('/api/discover')).json();
+                    } catch (e) { /* home screen just stays empty */ }
+                },
+                async fetchLibrary() {
+                    try {
+                        this.library = await (await fetch('/api/library')).json();
+                    } catch (e) { /* keep last known index */ }
+                },
+                inLibrary(item) {
+                    if (!item) return false;
+                    const name = (item.name || '').toLowerCase().trim();
+                    if (item.type === 'movie') {
+                        const year = String(item.year || '').split(/[–-]/)[0].trim();
+                        return this.library.movies.includes(`${name} (${year})`);
+                    }
+                    return (this.library.series[name] || []).length > 0;
+                },
+                epInLibrary(season, episode) {
+                    const name = (this.detail.data?.name || '').toLowerCase().trim();
+                    return (this.library.series[name] || []).includes(`${season}:${episode}`);
+                },
+                seriesInLibrary() {
+                    const name = (this.detail.data?.name || '').toLowerCase().trim();
+                    return (this.library.series[name] || []).length > 0;
+                },
+                selectMissing() {
+                    this.selected = {};
+                    (this.detail.data?.seasons || []).forEach(s => s.episodes.forEach(ep => {
+                        if (!this.epInLibrary(s.season, ep.episode))
+                            this.selected[`${s.season}-${ep.episode}`] = true;
+                    }));
+                },
+
                 // ── Active tasks (cancel) ───────────────────────────────────
                 async fetchTasks() {
                     try {
@@ -734,12 +807,14 @@
                     this.fetchFailures();
                     this.fetchMonitored();
                     this.fetchTasks();
+                    this.fetchDiscover();
+                    this.fetchLibrary();
                     this.logInterval = setInterval(() => {
                         this.fetchLogs();
                         this.fetchDownloads();
                         this.fetchTasks();
                         if (Math.random() > 0.7) this.fetchFailures();
-                        if (Math.random() > 0.8) this.fetchMonitored();
+                        if (Math.random() > 0.8) { this.fetchMonitored(); this.fetchLibrary(); }
                         if (Math.random() > 0.9) this.fetchStatus();
                     }, 2000);
                 }

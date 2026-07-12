@@ -23,7 +23,7 @@ logger.setLevel(logging.INFO)
 
 # Bump on every release — shown in the UI header, /api/status, and task logs
 # so a stale Docker image is immediately obvious.
-VERSION = "1.8.0"
+VERSION = "1.9.0"
 
 # Matches real episode files: "S01E02", "s1e2", or "01x08" style markers.
 # Anything without one (gag reels, VFX breakdowns...) is pack bonus content.
@@ -225,6 +225,38 @@ def _target_subdir(base_dir: str, content_name: str, start_type: str, fname: str
     s_match = re.search(r"[Ss](\d{1,2})", fname)
     s_dir = f"Season {int(s_match.group(1)):02d}" if s_match else ""
     return os.path.join(base_dir, content_name, s_dir)
+
+
+# ─── Library index (what Zapflix has delivered) ────────────────────────────────
+
+def build_library_index() -> dict:
+    """What Zapflix has delivered, from the journal's sent records.
+
+    Returns {"movies": [names...], "series": {name: ["s:e", ...]}} with
+    lowercase keys for tolerant matching in the UI. Covers everything
+    journaled (cached fast-path files included as of v1.9).
+    """
+    with _deliveries_lock:
+        sent = _read_deliveries().get("sent", {})
+    movies: set[str] = set()
+    series: dict[str, set[str]] = {}
+    for rec in sent.values():
+        if not rec.get("gid"):  # skipped extras are journaled with gid=""
+            continue
+        name = (rec.get("content_name") or "").lower().strip()
+        if not name:
+            continue
+        if rec.get("type") == "movie":
+            movies.add(name)
+        else:
+            m = re.search(r"[Ss](\d{1,2})\s*[Ee](\d{1,3})", rec.get("fname", ""))
+            if not m:
+                m = re.search(r"\b(\d{1,2})x(\d{2,3})\b", rec.get("fname", ""))
+            if m:
+                series.setdefault(name, set()).add(f"{int(m.group(1))}:{int(m.group(2))}")
+    return {"movies": sorted(movies),
+            "series": {k: sorted(v, key=lambda s: tuple(map(int, s.split(":"))))
+                       for k, v in series.items()}}
 
 
 # ─── UI config editor ──────────────────────────────────────────────────────────
@@ -513,10 +545,13 @@ def retry_failure(fid: str, log_callback: Callable[[str], None] = lambda m: None
     return False, "aria2 rejected the download again"
 
 
-def _deliver_cached(stream, aria2_client, base_dir, content_name, start_type, log_callback) -> bool:
+def _deliver_cached(stream, aria2_client, base_dir, content_name, start_type,
+                    log_callback, folder=None) -> bool:
     """Fast path for cached streams: resolve the direct link and push to aria2.
 
     Returns True on success. No RD polling, no unrestrict — instant & reliable.
+    Journaled via record_sent (keyed by the stable resolve URL) so the library
+    index sees it and the aria2 error sweep covers it.
     """
     direct = resolve_direct_link(stream.resolve_url)
     if not direct:
@@ -525,6 +560,7 @@ def _deliver_cached(stream, aria2_client, base_dir, content_name, start_type, lo
     subdir = _target_subdir(base_dir, content_name, start_type, fname)
     gid = aria2_client.add_download(direct, directory=subdir, filename=fname)
     if gid:
+        record_sent(stream.resolve_url, gid, fname, content_name, start_type, folder)
         log_callback(f"🚀 Sent cached file to aria2: {fname}")
         return True
     return False
@@ -602,7 +638,7 @@ def process_download_task(
             _check_cancel(cancel)
             # Fast path: cached stream + aria2 -> instant direct link
             if aria2_client and selected.cached and selected.resolve_url:
-                if _deliver_cached(selected, aria2_client, base_dir, content_name, "movie", log_callback):
+                if _deliver_cached(selected, aria2_client, base_dir, content_name, "movie", log_callback, folder):
                     log_callback("✨ Task completed!")
                     return {"type": "movie", "delivered": True}
                 log_callback("↳ Cached fast-path failed, falling back to RD download...")
@@ -682,7 +718,7 @@ def process_download_task(
                 if aria2_client and selected.cached and selected.resolve_url:
                     if selected.resolve_url in sent_resolves:
                         continue
-                    if _deliver_cached(selected, aria2_client, base_dir, series.name, "series", log_callback):
+                    if _deliver_cached(selected, aria2_client, base_dir, series.name, "series", log_callback, folder):
                         log_callback(f"⬇️ {ep.label}: {cache_tag}{selected.quality} ({selected.size})")
                         sent_resolves.add(selected.resolve_url)
                         cached_sent += 1

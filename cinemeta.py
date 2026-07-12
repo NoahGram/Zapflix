@@ -77,6 +77,28 @@ class Series:
         return episodes
 
 
+def _parse_metas(data: dict, content_type: str) -> list[dict]:
+    return [{
+        "imdb_id": meta.get("imdb_id") or meta.get("id"),
+        "name": meta.get("name", "Unknown"),
+        "year": meta.get("releaseInfo", meta.get("year", "?")),
+        "type": content_type,
+        "poster": meta.get("poster", ""),
+        "background": meta.get("background", ""),
+    } for meta in data.get("metas", [])]
+
+
+def get_catalog(content_type: str, limit: int = 20) -> list[dict]:
+    """Cinemeta's trending/popular catalog ('top') for movies or series."""
+    url = f"{CINEMETA_BASE}/catalog/{content_type}/top.json"
+    try:
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        return _parse_metas(resp.json(), content_type)[:limit]
+    except Exception:
+        return []
+
+
 def search_series(query: str) -> list[dict]:
     """Search for a series by name. Returns list of {imdb_id, name, year, type}."""
     url = f"{CINEMETA_BASE}/catalog/series/top/search={requests.utils.quote(query)}.json"
