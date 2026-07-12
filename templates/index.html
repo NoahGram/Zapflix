@@ -134,10 +134,18 @@
                                 <button @click="toggleAll(false)" class="text-xs px-3 py-1 bg-gray-700 rounded hover:bg-gray-600">Clear</button>
                                 <span class="text-xs text-gray-400" x-text="selectedCount() + ' episode(s) selected'"></span>
                             </div>
-                            <button @click="startDownload()" :disabled="downloading || selectedCount()===0"
-                                    class="px-5 py-2 bg-green-600 rounded font-bold shadow hover:bg-green-700 transition disabled:opacity-40">
-                                <span x-text="downloading ? 'Queued ✓' : '⬇ Download selected'"></span>
-                            </button>
+                            <div class="flex items-center gap-2">
+                                <button @click="toggleMonitor()"
+                                        :class="isMonitored(detail.item?.imdb_id) ? 'bg-yellow-600 hover:bg-yellow-700' : 'bg-gray-700 hover:bg-gray-600'"
+                                        class="px-4 py-2 rounded font-bold shadow transition"
+                                        title="Auto-download new episodes as they air">
+                                    <span x-text="isMonitored(detail.item?.imdb_id) ? '🔔 Monitoring' : '🔕 Monitor'"></span>
+                                </button>
+                                <button @click="startDownload()" :disabled="downloading || selectedCount()===0"
+                                        class="px-5 py-2 bg-green-600 rounded font-bold shadow hover:bg-green-700 transition disabled:opacity-40">
+                                    <span x-text="downloading ? 'Queued ✓' : '⬇ Download selected'"></span>
+                                </button>
+                            </div>
                         </div>
 
                         <template x-for="s in detail.data.seasons" :key="s.season">
@@ -163,6 +171,29 @@
                                 </div>
                             </div>
                         </template>
+                    </div>
+                </template>
+            </div>
+        </div>
+
+        <!-- Monitored shows -->
+        <div class="mb-6 glass-panel rounded-lg shadow-2xl overflow-hidden" x-show="monitored.length > 0" x-cloak>
+            <div class="bg-gray-800 bg-opacity-80 px-4 py-2 text-xs text-gray-400 border-b border-gray-700 flex justify-between items-center">
+                <span>🔔 MONITORED SHOWS <span class="text-gray-600" x-text="'· ' + monitored.length"></span></span>
+                <button @click="checkNow()" class="text-blue-300 hover:text-blue-100 transition font-semibold">Check now</button>
+            </div>
+            <div class="p-3 space-y-1.5 max-h-48 overflow-y-auto">
+                <template x-for="m in monitored" :key="m.imdb_id">
+                    <div class="flex justify-between items-center gap-3 text-xs">
+                        <div class="min-w-0">
+                            <span class="text-gray-200 font-semibold" x-text="m.name"></span>
+                            <span class="text-gray-500 ml-2"
+                                  x-text="m.last_grab ? ('last grab ' + m.last_grab) : 'waiting for new episodes'"></span>
+                        </div>
+                        <div class="whitespace-nowrap space-x-3 text-gray-500">
+                            <span x-text="m.last_check ? ('checked ' + new Date(m.last_check * 1000).toLocaleString()) : 'not checked yet'"></span>
+                            <button @click="unmonitor(m)" class="px-2 py-0.5 bg-gray-700 rounded hover:bg-red-700 transition" title="Stop monitoring">✕</button>
+                        </div>
                     </div>
                 </template>
             </div>
@@ -259,6 +290,7 @@
             return {
                 query: '', results: [], logs: [], status: {}, logInterval: null,
                 downloads: [], failures: [], retrying: false,
+                monitored: [],
                 searching: false, downloading: false,
                 view: 'catalog',
                 detail: { loading: false, data: null, item: null },
@@ -417,6 +449,41 @@
                 },
                 countBy(status) { return this.downloads.filter(d => d.status === status).length; },
 
+                // ── New-episode monitoring ──────────────────────────────────
+                async fetchMonitored() {
+                    try {
+                        this.monitored = await (await fetch('/api/monitored')).json();
+                    } catch (e) { /* keep last known list */ }
+                },
+                isMonitored(imdbId) {
+                    return !!imdbId && this.monitored.some(m => m.imdb_id === imdbId);
+                },
+                async toggleMonitor() {
+                    const id = this.detail.item?.imdb_id;
+                    if (!id) return;
+                    try {
+                        if (this.isMonitored(id)) {
+                            await fetch(`/api/monitored/${id}`, { method: 'DELETE' });
+                            this.pushLog(`🔕 Stopped monitoring ${this.detail.item.name}`);
+                        } else {
+                            const res = await (await fetch(`/api/monitored/${id}`, { method: 'POST' })).json();
+                            this.pushLog((res.ok ? '🔔 ' : '❌ ') + res.message);
+                        }
+                    } catch (e) { this.pushLog('❌ Monitor request failed: ' + e); }
+                    this.fetchMonitored();
+                },
+                async unmonitor(m) {
+                    try { await fetch(`/api/monitored/${m.imdb_id}`, { method: 'DELETE' }); } catch (e) {}
+                    this.pushLog(`🔕 Stopped monitoring ${m.name}`);
+                    this.fetchMonitored();
+                },
+                async checkNow() {
+                    try {
+                        await fetch('/api/monitored-check', { method: 'POST' });
+                        this.pushLog('🔔 Manual monitoring check started…');
+                    } catch (e) { this.pushLog('❌ Check request failed: ' + e); }
+                },
+
                 // ── Failed files panel ──────────────────────────────────────
                 async fetchFailures() {
                     try {
@@ -483,10 +550,12 @@
                     this.fetchLogs();
                     this.fetchDownloads();
                     this.fetchFailures();
+                    this.fetchMonitored();
                     this.logInterval = setInterval(() => {
                         this.fetchLogs();
                         this.fetchDownloads();
                         if (Math.random() > 0.7) this.fetchFailures();
+                        if (Math.random() > 0.8) this.fetchMonitored();
                         if (Math.random() > 0.9) this.fetchStatus();
                     }, 2000);
                 }

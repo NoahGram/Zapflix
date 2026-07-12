@@ -23,7 +23,7 @@ logger.setLevel(logging.INFO)
 
 # Bump on every release — shown in the UI header, /api/status, and task logs
 # so a stale Docker image is immediately obvious.
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 
 # Matches real episode files: "S01E02", "s1e2", or "01x08" style markers.
 # Anything without one (gag reels, VFX breakdowns...) is pack bonus content.
@@ -383,7 +383,7 @@ def process_download_task(
 
             if not selected:
                 log_callback("❌ No suitable stream found.")
-                return
+                return {"type": "movie", "delivered": False}
 
             cache_tag = "⚡RD+ " if selected.cached else ""
             log_callback(f"✅ Selected: {cache_tag}{selected.quality} | {selected.size}")
@@ -395,7 +395,7 @@ def process_download_task(
             if aria2_client and selected.cached and selected.resolve_url:
                 if _deliver_cached(selected, aria2_client, base_dir, content_name, "movie", log_callback):
                     log_callback("✨ Task completed!")
-                    return
+                    return {"type": "movie", "delivered": True}
                 log_callback("↳ Cached fast-path failed, falling back to RD download...")
 
             # Fallback: add magnet, let RD download, then sync to aria2
@@ -404,6 +404,8 @@ def process_download_task(
             if aria2_client:
                 log_callback("⏳ Waiting for RD to cache...")
                 sync_rd_to_aria2(rd_client, aria2_client, content_name, "movie", config, log_callback)
+            log_callback("✨ Task completed!")
+            return {"type": "movie", "delivered": True}
 
         elif type == "series":
             series = get_series_metadata(imdb_id)
@@ -417,6 +419,7 @@ def process_download_task(
             covered_hashes: set[str] = set()
             covered_seasons: set[int] = set()
             sent_resolves: set[str] = set()
+            no_stream_keys: set[str] = set()  # "season:episode" with no stream found
             cached_sent = 0
             rd_queued = 0
             pack_covered = 0
@@ -436,6 +439,7 @@ def process_download_task(
                 if not selected:
                     log_callback(f"⚠️ No stream for {ep.label}")
                     no_stream += 1
+                    no_stream_keys.add(f"{ep.season}:{ep.episode}")
                     continue
 
                 pack_seasons = _pack_seasons(selected, ep.season)
@@ -488,10 +492,20 @@ def process_download_task(
                 log_callback("⏳ Syncing RD torrents to aria2 (instant for cached packs)...")
                 sync_rd_to_aria2(rd_client, aria2_client, series.name, "series", config, log_callback)
 
+            log_callback("✨ Task completed!")
+            # Outcome per selected episode — the monitor uses this to update
+            # its ledger (grabbed = reached any delivery path; no-stream ones
+            # are retried on the next monitoring check).
+            grabbed = [f"{ep.season}:{ep.episode}" for ep in episodes
+                       if f"{ep.season}:{ep.episode}" not in no_stream_keys]
+            return {"type": "series", "grabbed": grabbed,
+                    "no_stream": sorted(no_stream_keys)}
+
         log_callback("✨ Task completed!")
     except Exception as e:
         log_callback(f"❌ CRITICAL ERROR: {str(e)}")
         log_callback(traceback.format_exc())
+    return None
 
 
 def sync_rd_to_aria2(rd_client, aria2_client, content_name, start_type, config, log_callback):

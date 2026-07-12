@@ -11,8 +11,12 @@ import time
 import os
 
 from cinemeta import search_all, get_meta
+import threading
+
 from backend import (process_download_task, load_config, VERSION,
                      list_failures, remove_failure, retry_failure)
+from monitor import (list_monitored, add_monitored, remove_monitored,
+                     note_grabbed, check_all, monitor_loop)
 from clients import Aria2Client
 
 app = FastAPI(title="Zapflix Web")
@@ -45,7 +49,7 @@ async def read_root(request: Request):
     return templates.TemplateResponse(request, "index.html")
 
 @app.get("/api/search")
-async def search(q: str):
+def search(q: str):
     if not q: return []
     try:
         return search_all(q)
@@ -53,7 +57,7 @@ async def search(q: str):
         return [{"name": f"Error: {e}", "imdb_id": "error", "type": "error", "year": ""}]
 
 @app.get("/api/meta/{content_type}/{imdb_id}")
-async def meta(content_type: str, imdb_id: str):
+def meta(content_type: str, imdb_id: str):
     try:
         data = get_meta(content_type, imdb_id)
         if not data:
@@ -62,12 +66,17 @@ async def meta(content_type: str, imdb_id: str):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
+def _download_and_note(imdb_id: str, type: str, selection):
+    """Run a download and record grabbed episodes in the monitor ledger, so
+    manual downloads of a monitored show aren't re-grabbed by the checker."""
+    result = process_download_task(imdb_id, type, distinct_logs, selection)
+    if result and result.get("type") == "series":
+        note_grabbed(imdb_id, result.get("grabbed", []))
+
 @app.post("/api/download")
 async def start_download(req: DownloadRequest, background_tasks: BackgroundTasks):
     distinct_logs(f"Received download request for {req.imdb_id}")
-    background_tasks.add_task(
-        process_download_task, req.imdb_id, req.type, distinct_logs, req.selection
-    )
+    background_tasks.add_task(_download_and_note, req.imdb_id, req.type, req.selection)
     return {"message": f"Started download for {req.imdb_id}", "status": "queued"}
 
 @app.get("/api/logs")
@@ -75,7 +84,7 @@ async def get_logs():
     return list(logs)
 
 @app.get("/api/downloads")
-async def downloads():
+def downloads():
     """Live aria2 download list for the UI's Downloads panel."""
     config = load_config()
     a_cfg = config.get("aria2", {})
@@ -110,28 +119,54 @@ async def downloads():
     return out
 
 @app.get("/api/failures")
-async def failures():
+def failures():
     """Failed file deliveries (persisted) — the UI's Failed files panel."""
     return sorted(list_failures(), key=lambda x: x.get("ts", 0), reverse=True)
 
 @app.post("/api/failures/{fid}/retry")
-async def failure_retry(fid: str):
+def failure_retry(fid: str):
     ok, message = retry_failure(fid, distinct_logs)
     if not ok:
         distinct_logs(f"❌ Retry failed: {message}")
     return {"ok": ok, "message": message}
 
 @app.delete("/api/failures/{fid}")
-async def failure_dismiss(fid: str):
+def failure_dismiss(fid: str):
     return {"ok": remove_failure(fid)}
 
 @app.delete("/api/failures")
-async def failures_clear():
+def failures_clear():
     remove_failure(None)
     return {"ok": True}
 
+@app.get("/api/monitored")
+def monitored():
+    items = list_monitored()
+    # known lists can be large (One Piece: 1000+) — send counts, not contents
+    return [{k: v for k, v in it.items() if k != "known"} | {"known_count": len(it.get("known", []))}
+            for it in items]
+
+@app.post("/api/monitored/{imdb_id}")
+def monitor_add(imdb_id: str):
+    ok, message = add_monitored(imdb_id)
+    distinct_logs(("🔔 " if ok else "❌ ") + message)
+    return {"ok": ok, "message": message}
+
+@app.delete("/api/monitored/{imdb_id}")
+def monitor_remove(imdb_id: str):
+    return {"ok": remove_monitored(imdb_id)}
+
+@app.post("/api/monitored-check")
+async def monitor_check(background_tasks: BackgroundTasks):
+    background_tasks.add_task(check_all, distinct_logs)
+    return {"ok": True, "message": "Check started"}
+
+@app.on_event("startup")
+async def start_monitor_thread():
+    threading.Thread(target=monitor_loop, args=(distinct_logs,), daemon=True).start()
+
 @app.get("/api/status")
-async def status():
+def status():
     config = load_config()
     return {
         "status": "online",

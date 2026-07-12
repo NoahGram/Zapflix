@@ -17,6 +17,7 @@ class Episode:
     name: str
     imdb_id: str  # series IMDB ID (used for torrentio queries)
     overview: str = ""
+    released: str = ""  # ISO timestamp from Cinemeta; "" = unknown (assume aired)
 
     @property
     def label(self) -> str:
@@ -186,6 +187,7 @@ def get_series_metadata(imdb_id: str) -> Series:
             name=video.get("name") or video.get("title", f"Episode {episode_num}"),
             imdb_id=imdb_id,
             overview=video.get("overview", ""),
+            released=video.get("released", "") or "",
         )
 
         seasons.setdefault(ep.season, []).append(ep)
