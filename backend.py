@@ -23,7 +23,7 @@ logger.setLevel(logging.INFO)
 
 # Bump on every release — shown in the UI header, /api/status, and task logs
 # so a stale Docker image is immediately obvious.
-VERSION = "1.6.0"
+VERSION = "1.7.0"
 
 # Matches real episode files: "S01E02", "s1e2", or "01x08" style markers.
 # Anything without one (gag reels, VFX breakdowns...) is pack bonus content.
@@ -37,6 +37,13 @@ CONFIG_FILE = Path(__file__).parent / "config.json"
 DATA_DIR = Path(__file__).parent / "data"
 FAILED_FILE = DATA_DIR / "failed.json"
 _failed_lock = threading.Lock()
+
+# Delivery journal: RD torrents we added (until every file is sent to aria2)
+# and every link already sent. Survives reboots/rebuilds so a container that
+# dies mid-delivery can pick up where it left off instead of losing files.
+DELIVERIES_FILE = DATA_DIR / "deliveries.json"
+_deliveries_lock = threading.Lock()
+RECONCILE_WINDOW_DAYS = 14
 
 # Load .env once at import so env vars are available to load_config().
 load_dotenv(Path(__file__).parent / ".env")
@@ -220,6 +227,77 @@ def _target_subdir(base_dir: str, content_name: str, start_type: str, fname: str
     return os.path.join(base_dir, content_name, s_dir)
 
 
+# ─── Library folder routing ────────────────────────────────────────────────────
+
+def _content_root(config: dict, folder: Optional[str], start_type: str) -> str:
+    """Base directory for a download: aria2 download_dir + library subfolder.
+
+    folder=None -> the configured default for the content type ('' = root,
+    which is the pre-1.7 behavior). The folder is as *aria2* sees it, same
+    as download_dir itself.
+    """
+    a_cfg = config.get("aria2", {})
+    base = a_cfg.get("download_dir", "")
+    if folder is None:
+        key = "default_movie_folder" if start_type == "movie" else "default_series_folder"
+        folder = a_cfg.get(key, "")
+    return os.path.join(base, folder) if folder else base
+
+
+# ─── Delivery journal ──────────────────────────────────────────────────────────
+
+def _read_deliveries() -> dict:
+    try:
+        with open(DELIVERIES_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {"torrents": {}, "sent": {}}
+
+
+def _write_deliveries(data: dict):
+    DELIVERIES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = DELIVERIES_FILE.with_suffix(".tmp")
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=1)
+    tmp.replace(DELIVERIES_FILE)
+
+
+def record_torrent(tid: str, content_name: str, start_type: str, folder: Optional[str]):
+    """Journal an RD torrent we added, until all its files reach aria2."""
+    if not tid:
+        return
+    with _deliveries_lock:
+        d = _read_deliveries()
+        d["torrents"].setdefault(tid, {
+            "content_name": content_name, "type": start_type,
+            "folder": folder, "ts": int(time.time()), "done": False,
+        })
+        _write_deliveries(d)
+
+
+def mark_torrent_done(tid: str):
+    with _deliveries_lock:
+        d = _read_deliveries()
+        if tid in d["torrents"]:
+            d["torrents"][tid]["done"] = True
+            _write_deliveries(d)
+
+
+def link_sent(link: str) -> bool:
+    with _deliveries_lock:
+        return link in _read_deliveries()["sent"]
+
+
+def record_sent(link: str, gid: str, fname: str, content_name: str,
+                start_type: str, folder: Optional[str]):
+    with _deliveries_lock:
+        d = _read_deliveries()
+        d["sent"][link] = {"gid": gid, "fname": fname, "ts": int(time.time()),
+                           "content_name": content_name, "type": start_type,
+                           "folder": folder, "swept": False}
+        _write_deliveries(d)
+
+
 # ─── Failed-delivery store ─────────────────────────────────────────────────────
 
 def _read_failures() -> list[dict]:
@@ -244,7 +322,7 @@ def list_failures() -> list[dict]:
 
 
 def record_failure(content_name: str, start_type: str, rd_link: str,
-                   filename: str, reason: str):
+                   filename: str, reason: str, folder: Optional[str] = None):
     """Persist a failed file delivery so the UI can offer a retry."""
     with _failed_lock:
         items = _read_failures()
@@ -261,6 +339,7 @@ def record_failure(content_name: str, start_type: str, rd_link: str,
                 "rd_link": rd_link,
                 "filename": filename,
                 "reason": reason,
+                "folder": folder,
             })
         _write_failures(items)
 
@@ -288,7 +367,8 @@ def retry_failure(fid: str, log_callback: Callable[[str], None] = lambda m: None
     item = rd_client.unrestrict_link(entry["rd_link"])
     if not item or not item.get("download"):
         record_failure(entry["content_name"], entry["type"], entry["rd_link"],
-                       entry.get("filename", "?"), "unrestrict failed (retried)")
+                       entry.get("filename", "?"), "unrestrict failed (retried)",
+                       entry.get("folder"))
         return False, "Unrestrict failed again — the RD torrent may be gone"
 
     fname = item.get("filename") or entry.get("filename") or "unknown"
@@ -297,16 +377,18 @@ def retry_failure(fid: str, log_callback: Callable[[str], None] = lambda m: None
         remove_failure(fid)
         return True, f"Skipped (bonus/extra content): {fname}"
 
-    base_dir = config.get("aria2", {}).get("download_dir", "")
+    base_dir = _content_root(config, entry.get("folder"), entry["type"])
     subdir = _target_subdir(base_dir, entry["content_name"], entry["type"], fname)
     gid = aria2_client.add_download(item["download"], directory=subdir, filename=fname)
     if gid:
         remove_failure(fid)
+        record_sent(entry["rd_link"], gid, fname, entry["content_name"],
+                    entry["type"], entry.get("folder"))
         log_callback(f"🔁 Retry OK — sent to aria2: {fname}")
         return True, f"Sent to aria2: {fname}"
 
     record_failure(entry["content_name"], entry["type"], entry["rd_link"],
-                   fname, "aria2 add failed (retried)")
+                   fname, "aria2 add failed (retried)", entry.get("folder"))
     return False, "aria2 rejected the download again"
 
 
@@ -332,6 +414,7 @@ def process_download_task(
     type: str,
     log_callback: Callable[[str], None] = lambda msg: None,
     selection: Union[str, list, None] = None,
+    folder: Optional[str] = None,  # library subfolder (None = type default)
 ):
     """Background task to handle the full download process."""
     try:
@@ -366,7 +449,7 @@ def process_download_task(
         )
 
         delay = float(config.get("download", {}).get("delay_between_episodes", 1.5))
-        base_dir = config.get("aria2", {}).get("download_dir", "")
+        base_dir = _content_root(config, folder, type)
 
         log_callback("🔌 Connected to Real-Debrid"
                      + (" + aria2" if aria2_client else " (no aria2 — files stay in RD cloud)"))
@@ -401,9 +484,10 @@ def process_download_task(
             # Fallback: add magnet, let RD download, then sync to aria2
             log_callback("📥 Adding to Real-Debrid...")
             rd_client.add_magnet(selected)
+            record_torrent(rd_client.torrent_id(selected.info_hash), content_name, "movie", folder)
             if aria2_client:
                 log_callback("⏳ Waiting for RD to cache...")
-                sync_rd_to_aria2(rd_client, aria2_client, content_name, "movie", config, log_callback)
+                sync_rd_to_aria2(rd_client, aria2_client, content_name, "movie", config, log_callback, base_dir, folder)
             log_callback("✨ Task completed!")
             return {"type": "movie", "delivered": True}
 
@@ -460,6 +544,7 @@ def process_download_task(
                     log_callback(f"📦 {ep.label}: {cache_tag}pack covers {label} "
                                  f"({selected.quality}, {selected.size}) — adding to RD")
                     rd_client.add_magnet(selected)
+                    record_torrent(rd_client.torrent_id(selected.info_hash), series.name, "series", folder)
                     covered_hashes.add(selected.info_hash)
                     covered_seasons |= pack_seasons
                     rd_queued += 1
@@ -478,6 +563,7 @@ def process_download_task(
                 # Uncached (or resolve failed): add magnet for RD to download
                 log_callback(f"⬇️ {ep.label}: adding {cache_tag}{selected.quality} ({selected.size}) to RD")
                 rd_client.add_magnet(selected)
+                record_torrent(rd_client.torrent_id(selected.info_hash), series.name, "series", folder)
                 covered_hashes.add(selected.info_hash)
                 rd_queued += 1
 
@@ -490,7 +576,7 @@ def process_download_task(
             # Packs and uncached torrents are delivered by the sync stage
             if aria2_client and rd_queued:
                 log_callback("⏳ Syncing RD torrents to aria2 (instant for cached packs)...")
-                sync_rd_to_aria2(rd_client, aria2_client, series.name, "series", config, log_callback)
+                sync_rd_to_aria2(rd_client, aria2_client, series.name, "series", config, log_callback, base_dir, folder)
 
             log_callback("✨ Task completed!")
             # Outcome per selected episode — the monitor uses this to update
@@ -508,16 +594,18 @@ def process_download_task(
     return None
 
 
-def sync_rd_to_aria2(rd_client, aria2_client, content_name, start_type, config, log_callback):
+def sync_rd_to_aria2(rd_client, aria2_client, content_name, start_type, config,
+                     log_callback, base_dir=None, folder=None):
     """Poll RD to completion, then push each file to aria2 exactly once.
 
-    Used for uncached torrents that RD must download first. Each RD file link is
-    unrestricted and forwarded a single time (tracked in `sent_links`), with a
-    retry on failure and a per-torrent timeout. (Cached content is delivered
-    directly via resolve_direct_link and never reaches this path.)
+    Used for uncached torrents that RD must download first. Sent links are
+    tracked in the persistent delivery journal, so an interrupted sync is
+    finished later by resume_pending_deliveries(). (Cached single episodes are
+    delivered directly via resolve_direct_link and never reach this path.)
     """
     try:
-        base_dir = config.get("aria2", {}).get("download_dir", "")
+        if base_dir is None:
+            base_dir = config.get("aria2", {}).get("download_dir", "")
         timeout = int(config.get("aria2", {}).get("poll_timeout", 900))
         poll_interval = 5
 
@@ -528,7 +616,6 @@ def sync_rd_to_aria2(rd_client, aria2_client, content_name, start_type, config, 
 
         log_callback(f"🔄 Monitoring {len(pending)} torrent(s) on RD...")
 
-        sent_links: set[str] = set()
         total_sent = 0
         total_failed = 0
         skipped_extras = 0
@@ -545,62 +632,26 @@ def sync_rd_to_aria2(rd_client, aria2_client, content_name, start_type, config, 
                     break
                 if status in ("error", "virus", "dead"):
                     log_callback(f"❌ RD error for {info.get('filename', '?')}: {status}")
+                    mark_torrent_done(tid)
                     info = None
                     break
                 time.sleep(poll_interval)
             else:
-                log_callback(f"⏳ Torrent still processing after {timeout}s — "
-                             f"RD keeps downloading in the background: {info.get('filename', '?') if info else tid}")
+                log_callback(f"⏳ Torrent still processing after {timeout}s — the delivery "
+                             f"journal will finish it later: {info.get('filename', '?') if info else tid}")
                 continue
 
             if not info:
                 continue
 
-            links = info.get("links", [])
-            if not links:
-                log_callback(f"⚠️ No files in torrent: {info.get('filename', '?')}")
-                continue
-
-            for link in links:
-                if link in sent_links:
-                    continue
-
-                item = rd_client.unrestrict_link(link)
-                if not item or not item.get("download"):
-                    time.sleep(2)  # transient / expired-link retry
-                    item = rd_client.unrestrict_link(link)
-                if not item or not item.get("download"):
-                    torrent_name = info.get("filename", "?")
-                    log_callback(f"❌ Failed to unrestrict a link from '{torrent_name}' — saved for retry")
-                    record_failure(content_name, start_type, link,
-                                   f"(file from {torrent_name})", "unrestrict failed")
-                    total_failed += 1
-                    continue
-
-                fname = item.get("filename", "unknown")
-
-                # Series: only deliver real episodes. Season packs bundle bonus
-                # content (gag reels, VFX breakdowns...) whose names carry no
-                # episode marker — they'd clutter the library and same-named
-                # files from different seasons would overwrite each other.
-                if start_type == "series" and not _EPISODE_RE.search(fname):
-                    sent_links.add(link)
-                    skipped_extras += 1
-                    continue
-
-                subdir = _target_subdir(base_dir, content_name, start_type, fname)
-
-                gid = aria2_client.add_download(item["download"], directory=subdir, filename=fname)
-                if gid:
-                    sent_links.add(link)
-                    total_sent += 1
-                    log_callback(f"🚀 Sent to aria2: {fname}")
-                else:
-                    total_failed += 1
-                    log_callback(f"❌ aria2 failed for: {fname} — saved for retry")
-                    record_failure(content_name, start_type, link, fname, "aria2 add failed")
-
-                time.sleep(0.5)
+            sent, failed, skipped = _deliver_rd_links(
+                info, content_name, start_type, base_dir, folder,
+                rd_client, aria2_client, log_callback)
+            total_sent += sent
+            total_failed += failed
+            skipped_extras += skipped
+            if not failed:
+                mark_torrent_done(tid)
 
         summary = f"✅ Sent {total_sent} file(s) to aria2"
         if skipped_extras:
@@ -610,3 +661,138 @@ def sync_rd_to_aria2(rd_client, aria2_client, content_name, start_type, config, 
         log_callback(summary)
     except Exception as e:
         log_callback(f"❌ Sync Error: {str(e)}")
+
+
+def _deliver_rd_links(info, content_name, start_type, base_dir, folder,
+                      rd_client, aria2_client, log_callback) -> tuple[int, int, int]:
+    """Send every not-yet-sent file of a downloaded RD torrent to aria2.
+
+    Consults/updates the persistent delivery journal, so it is safe to call
+    again after a crash or reboot — already-sent links are skipped.
+    Returns (sent, failed, skipped_extras).
+    """
+    sent = failed = skipped = 0
+    for link in info.get("links", []):
+        if link_sent(link):
+            continue
+
+        item = rd_client.unrestrict_link(link)
+        if not item or not item.get("download"):
+            time.sleep(2)  # transient / expired-link retry
+            item = rd_client.unrestrict_link(link)
+        if not item or not item.get("download"):
+            torrent_name = info.get("filename", "?")
+            log_callback(f"❌ Failed to unrestrict a link from '{torrent_name}' — saved for retry")
+            record_failure(content_name, start_type, link,
+                           f"(file from {torrent_name})", "unrestrict failed", folder)
+            failed += 1
+            continue
+
+        fname = item.get("filename", "unknown")
+
+        # Series: only deliver real episodes. Season packs bundle bonus
+        # content (gag reels, VFX breakdowns...) whose names carry no
+        # episode marker — they'd clutter the library and same-named
+        # files from different seasons would overwrite each other.
+        if start_type == "series" and not _EPISODE_RE.search(fname):
+            record_sent(link, "", fname, content_name, start_type, folder)  # never resend
+            skipped += 1
+            continue
+
+        subdir = _target_subdir(base_dir, content_name, start_type, fname)
+        gid = aria2_client.add_download(item["download"], directory=subdir, filename=fname)
+        if gid:
+            record_sent(link, gid, fname, content_name, start_type, folder)
+            sent += 1
+            log_callback(f"🚀 Sent to aria2: {fname}")
+        else:
+            failed += 1
+            log_callback(f"❌ aria2 failed for: {fname} — saved for retry")
+            record_failure(content_name, start_type, link, fname, "aria2 add failed", folder)
+
+        time.sleep(0.5)
+    return sent, failed, skipped
+
+
+def resume_pending_deliveries(log_callback: Callable[[str], None] = lambda m: None):
+    """Finish deliveries interrupted by a crash/reboot.
+
+    Walks journaled RD torrents that never completed delivery: if RD has
+    finished downloading them meanwhile, their unsent files are pushed to
+    aria2 now. Runs at startup and before every monitoring pass.
+    """
+    now = int(time.time())
+    with _deliveries_lock:
+        d = _read_deliveries()
+    pending = {tid: t for tid, t in d.get("torrents", {}).items()
+               if not t.get("done") and now - t.get("ts", 0) < RECONCILE_WINDOW_DAYS * 86400}
+    if not pending:
+        return
+
+    config = load_config()
+    rd_client, aria2_client = get_clients(config)
+    if not rd_client or not aria2_client:
+        return
+
+    log_callback(f"🧷 Resuming {len(pending)} unfinished RD deliver{'y' if len(pending) == 1 else 'ies'}...")
+    for tid, t in pending.items():
+        info = rd_client.get_torrent_info(tid)
+        if not info:
+            mark_torrent_done(tid)  # gone from RD — nothing to resume
+            continue
+        status = info.get("status")
+        if status in ("error", "virus", "dead"):
+            log_callback(f"❌ RD gave up on '{info.get('filename', '?')}' ({status})")
+            mark_torrent_done(tid)
+            continue
+        if status != "downloaded":
+            continue  # RD still working — try again next pass
+
+        base_dir = _content_root(config, t.get("folder"), t.get("type", "series"))
+        sent, failed_n, _ = _deliver_rd_links(
+            info, t.get("content_name", "?"), t.get("type", "series"),
+            base_dir, t.get("folder"), rd_client, aria2_client, log_callback)
+        if not failed_n:
+            mark_torrent_done(tid)
+        if sent:
+            log_callback(f"🧷 Recovered {sent} file(s) from '{t.get('content_name', '?')}'")
+
+
+def sweep_aria2_errors(log_callback: Callable[[str], None] = lambda m: None):
+    """Move aria2 downloads that errored after being queued (e.g. RD link
+    expired across a reboot) into the retryable Failed files queue."""
+    now = int(time.time())
+    with _deliveries_lock:
+        d = _read_deliveries()
+    candidates = {link: s for link, s in d.get("sent", {}).items()
+                  if s.get("gid") and not s.get("swept")
+                  and now - s.get("ts", 0) < RECONCILE_WINDOW_DAYS * 86400}
+    if not candidates:
+        return
+
+    config = load_config()
+    _, aria2_client = get_clients(config)
+    if not aria2_client:
+        return
+
+    def _mark_swept(link):
+        with _deliveries_lock:
+            data = _read_deliveries()
+            if link in data["sent"]:
+                data["sent"][link]["swept"] = True
+                _write_deliveries(data)
+
+    for link, s in candidates.items():
+        st = aria2_client.tell_status(s["gid"])
+        if not st:
+            break  # aria2 unreachable (or gid purged) — try next sweep
+        status = st.get("status")
+        if status == "error":
+            log_callback(f"❌ aria2 download errored: {s.get('fname', '?')} — saved for retry")
+            record_failure(s.get("content_name", "?"), s.get("type", "series"),
+                           link, s.get("fname", "?"),
+                           f"aria2 error: {st.get('errorMessage', '?')[:80]}", s.get("folder"))
+            _mark_swept(link)
+        elif status in ("complete", "removed"):
+            _mark_swept(link)
+        # active/waiting/paused: leave for a later sweep

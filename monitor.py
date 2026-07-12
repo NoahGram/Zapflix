@@ -19,7 +19,8 @@ import time
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
-from backend import DATA_DIR, load_config, process_download_task
+from backend import (DATA_DIR, load_config, process_download_task,
+                     resume_pending_deliveries, sweep_aria2_errors)
 from cinemeta import get_series_metadata
 
 MONITORED_FILE = DATA_DIR / "monitored.json"
@@ -59,9 +60,10 @@ def list_monitored() -> list[dict]:
         return _read()
 
 
-def add_monitored(imdb_id: str) -> tuple[bool, str]:
+def add_monitored(imdb_id: str, folder: Optional[str] = None) -> tuple[bool, str]:
     """Start monitoring a series. Seeds the ledger with all already-aired
-    episodes so only *future* episodes are auto-grabbed."""
+    episodes so only *future* episodes are auto-grabbed. `folder` is the
+    library subfolder new episodes are delivered to (None = series default)."""
     with _monitored_lock:
         items = _read()
         if any(it["imdb_id"] == imdb_id for it in items):
@@ -87,6 +89,7 @@ def add_monitored(imdb_id: str) -> tuple[bool, str]:
         items.append({
             "imdb_id": imdb_id,
             "name": series.name,
+            "folder": folder,
             "added": int(time.time()),
             "last_check": 0,
             "last_grab": "",
@@ -127,6 +130,14 @@ def check_all(log_callback: Callable[[str], None] = lambda m: None) -> Optional[
         log_callback("⏳ Monitoring check already running — skipped.")
         return None
     try:
+        # First: finish anything a crash/reboot interrupted, and surface
+        # aria2 downloads that errored since we queued them.
+        try:
+            resume_pending_deliveries(log_callback)
+            sweep_aria2_errors(log_callback)
+        except Exception as e:
+            log_callback(f"⚠️ Delivery reconcile failed: {e}")
+
         shows = list_monitored()
         if not shows:
             return {}
@@ -166,7 +177,8 @@ def check_all(log_callback: Callable[[str], None] = lambda m: None) -> Optional[
                 by_season.setdefault(ep.season, []).append(ep.episode)
             selection = [{"season": s, "episodes": eps} for s, eps in sorted(by_season.items())]
 
-            result = process_download_task(imdb_id, "series", log_callback, selection)
+            result = process_download_task(imdb_id, "series", log_callback, selection,
+                                           folder=show.get("folder"))
             grabbed = (result or {}).get("grabbed", [])
             if grabbed:
                 note_grabbed(imdb_id, grabbed)

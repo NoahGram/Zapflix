@@ -16,7 +16,10 @@
         "port": 6800,
         "secret": "",
         "download_dir": "/path/to/media/library",
-        "poll_timeout": 900
+        "poll_timeout": 900,
+        "library_folders": ["movies", "series", "anime"],
+        "default_movie_folder": "movies",
+        "default_series_folder": "series"
     },
     "download": {
         "delay_between_episodes": 1.5,

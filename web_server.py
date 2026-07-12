@@ -42,6 +42,8 @@ class DownloadRequest(BaseModel):
     type: str
     # None/"all" => everything; or [{"season": int, "episodes": [int,...]}, ...]
     selection: Optional[Union[str, List[dict]]] = None
+    # Library subfolder inside the aria2 download dir (None = type default)
+    folder: Optional[str] = None
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
@@ -66,17 +68,18 @@ def meta(content_type: str, imdb_id: str):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
-def _download_and_note(imdb_id: str, type: str, selection):
+def _download_and_note(imdb_id: str, type: str, selection, folder):
     """Run a download and record grabbed episodes in the monitor ledger, so
     manual downloads of a monitored show aren't re-grabbed by the checker."""
-    result = process_download_task(imdb_id, type, distinct_logs, selection)
+    result = process_download_task(imdb_id, type, distinct_logs, selection, folder)
     if result and result.get("type") == "series":
         note_grabbed(imdb_id, result.get("grabbed", []))
 
 @app.post("/api/download")
 async def start_download(req: DownloadRequest, background_tasks: BackgroundTasks):
     distinct_logs(f"Received download request for {req.imdb_id}")
-    background_tasks.add_task(_download_and_note, req.imdb_id, req.type, req.selection)
+    background_tasks.add_task(_download_and_note, req.imdb_id, req.type,
+                              req.selection, req.folder)
     return {"message": f"Started download for {req.imdb_id}", "status": "queued"}
 
 @app.get("/api/logs")
@@ -147,8 +150,8 @@ def monitored():
             for it in items]
 
 @app.post("/api/monitored/{imdb_id}")
-def monitor_add(imdb_id: str):
-    ok, message = add_monitored(imdb_id)
+def monitor_add(imdb_id: str, folder: Optional[str] = None):
+    ok, message = add_monitored(imdb_id, folder)
     distinct_logs(("🔔 " if ok else "❌ ") + message)
     return {"ok": ok, "message": message}
 
@@ -168,13 +171,19 @@ async def start_monitor_thread():
 @app.get("/api/status")
 def status():
     config = load_config()
+    a_cfg = config.get("aria2", {})
     return {
         "status": "online",
         "version": VERSION,
         "config_found": bool(config),
         "clients": {
             "rd": bool(config.get("real_debrid", {}).get("enabled") and config.get("real_debrid", {}).get("api_key")),
-            "aria2": bool(config.get("aria2", {}).get("enabled")),
+            "aria2": bool(a_cfg.get("enabled")),
+        },
+        "library": {
+            "folders": a_cfg.get("library_folders", []),
+            "default_movie": a_cfg.get("default_movie_folder", ""),
+            "default_series": a_cfg.get("default_series_folder", ""),
         }
     }
 

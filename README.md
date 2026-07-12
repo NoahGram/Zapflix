@@ -125,4 +125,11 @@ Zapflix/
 - **Monitoring**: hit 🔔 Monitor on a series and Zapflix auto-grabs new
   episodes as they air (checked every `monitoring.check_interval_hours`,
   default 6h; ledger in `data/monitored.json`).
+- **Library folders**: define `aria2.library_folders` (e.g. `movies`,
+  `series`, `anime`) and pick a destination per download; defaults per type
+  via `default_movie_folder` / `default_series_folder`.
+- **Reboot-safe**: a delivery journal (`data/deliveries.json`) records every
+  RD torrent and sent file — after a crash/reboot Zapflix finishes
+  interrupted deliveries and moves aria2 downloads that errored meanwhile
+  into the retryable Failed files queue.
 ```
