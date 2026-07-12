@@ -42,12 +42,16 @@
                     <span class="text-gray-600" x-show="status.version" x-text="'· v' + status.version"></span>
                 </div>
             </div>
-            <div class="text-right text-xs text-gray-400 space-y-1">
-                <div x-text="status.config_found ? '✅ Config Loaded' : '❌ Config Missing'"></div>
-                <div :class="status.clients?.rd ? 'text-green-500 font-bold' : 'text-gray-600'"
-                     x-text="status.clients?.rd ? 'RD Active' : 'RD Inactive'"></div>
-                <div :class="status.clients?.aria2 ? 'text-green-500' : 'text-gray-600'"
-                     x-text="status.clients?.aria2 ? 'aria2 → NAS' : 'aria2 off'"></div>
+            <div class="flex items-center gap-4">
+                <div class="text-right text-xs text-gray-400 space-y-1">
+                    <div x-text="status.config_found ? '✅ Config Loaded' : '❌ Config Missing'"></div>
+                    <div :class="status.clients?.rd ? 'text-green-500 font-bold' : 'text-gray-600'"
+                         x-text="status.clients?.rd ? 'RD Active' : 'RD Inactive'"></div>
+                    <div :class="status.clients?.aria2 ? 'text-green-500' : 'text-gray-600'"
+                         x-text="status.clients?.aria2 ? 'aria2 → NAS' : 'aria2 off'"></div>
+                </div>
+                <button @click="openSettings()" title="Settings"
+                        class="text-2xl hover:rotate-45 transition-transform duration-300">⚙️</button>
             </div>
         </header>
 
@@ -194,6 +198,30 @@
             </div>
         </div>
 
+        <!-- Active tasks -->
+        <div class="mb-6 glass-panel rounded-lg shadow-2xl overflow-hidden border border-blue-900" x-show="tasks.length > 0" x-cloak>
+            <div class="bg-blue-900 bg-opacity-30 px-4 py-2 text-xs text-blue-300 border-b border-blue-900">
+                ⏳ ACTIVE TASKS <span class="text-blue-400 font-bold" x-text="'· ' + tasks.length"></span>
+            </div>
+            <div class="p-3 space-y-1.5">
+                <template x-for="t in tasks" :key="t.id">
+                    <div class="flex justify-between items-center gap-3 text-xs">
+                        <div class="min-w-0 flex items-center gap-2">
+                            <span class="animate-pulse">●</span>
+                            <span class="text-gray-200 font-semibold truncate" x-text="t.name"></span>
+                            <span class="text-gray-500" x-text="t.type"></span>
+                            <span class="text-gray-500" x-text="'started ' + new Date(t.started * 1000).toLocaleTimeString()"></span>
+                        </div>
+                        <button @click="cancelTask(t)" :disabled="t.cancelling"
+                                class="px-3 py-1 rounded font-semibold transition"
+                                :class="t.cancelling ? 'bg-gray-700 text-gray-400' : 'bg-red-700 hover:bg-red-600'">
+                            <span x-text="t.cancelling ? 'Stopping…' : '🛑 Cancel'"></span>
+                        </button>
+                    </div>
+                </template>
+            </div>
+        </div>
+
         <!-- Monitored shows -->
         <div class="mb-6 glass-panel rounded-lg shadow-2xl overflow-hidden" x-show="monitored.length > 0" x-cloak>
             <div class="bg-gray-800 bg-opacity-80 px-4 py-2 text-xs text-gray-400 border-b border-gray-700 flex justify-between items-center">
@@ -233,13 +261,16 @@
                     <div class="text-xs">
                         <div class="flex justify-between items-center gap-3">
                             <span class="truncate text-gray-200" x-text="d.name" :title="d.name"></span>
-                            <span class="whitespace-nowrap text-gray-400">
+                            <span class="whitespace-nowrap text-gray-400 flex items-center gap-2">
                                 <template x-if="d.status === 'active'">
                                     <span><span x-text="fmtBytes(d.speed) + '/s'"></span> · <span x-text="fmtEta(d.eta)"></span></span>
                                 </template>
                                 <span x-show="d.status === 'waiting'" class="text-yellow-400">queued</span>
                                 <span x-show="d.status === 'complete'" class="text-green-500">✓ <span x-text="fmtBytes(d.total)"></span></span>
                                 <span x-show="d.status === 'error'" class="text-red-400" :title="d.error">✗ failed</span>
+                                <button x-show="d.status === 'active' || d.status === 'waiting'"
+                                        @click="cancelDownload(d)" title="Cancel this download"
+                                        class="px-1.5 rounded bg-gray-700 hover:bg-red-700 transition">✕</button>
                             </span>
                         </div>
                         <div class="h-1.5 bg-gray-700 bg-opacity-60 rounded mt-1 overflow-hidden">
@@ -286,6 +317,73 @@
             </div>
         </div>
 
+        <!-- Settings modal -->
+        <div x-show="settings.open" x-cloak
+             class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-70 p-4"
+             @click.self="settings.open = false" @keydown.escape.window="settings.open = false">
+            <div class="glass-panel rounded-lg shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+                <div class="bg-gray-800 bg-opacity-80 px-5 py-3 border-b border-gray-700 flex justify-between items-center">
+                    <span class="font-bold">⚙️ Settings</span>
+                    <button @click="settings.open = false" class="text-gray-400 hover:text-white">✕</button>
+                </div>
+                <div class="p-5 space-y-4 text-sm">
+                    <div>
+                        <label class="block text-xs text-gray-400 mb-1">Preferred quality (best first, comma-separated)</label>
+                        <input x-model="settings.form.preferred_quality" placeholder="1080p, 720p"
+                               class="w-full p-2 rounded bg-gray-800 border border-gray-600 focus:outline-none focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-400 mb-1">Exclude keywords (comma-separated)</label>
+                        <input x-model="settings.form.exclude_keywords" placeholder="cam, hdcam, telesync"
+                               class="w-full p-2 rounded bg-gray-800 border border-gray-600 focus:outline-none focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-400 mb-1">Library folders (comma-separated, inside the aria2 download dir)</label>
+                        <input x-model="settings.form.library_folders" placeholder="movies, series, anime"
+                               class="w-full p-2 rounded bg-gray-800 border border-gray-600 focus:outline-none focus:border-blue-500">
+                    </div>
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-xs text-gray-400 mb-1">Default movie folder</label>
+                            <input x-model="settings.form.default_movie_folder" placeholder="movies"
+                                   class="w-full p-2 rounded bg-gray-800 border border-gray-600 focus:outline-none focus:border-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-400 mb-1">Default series folder</label>
+                            <input x-model="settings.form.default_series_folder" placeholder="series"
+                                   class="w-full p-2 rounded bg-gray-800 border border-gray-600 focus:outline-none focus:border-blue-500">
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-3 gap-3">
+                        <div>
+                            <label class="block text-xs text-gray-400 mb-1">Episode delay (s)</label>
+                            <input x-model="settings.form.delay_between_episodes" type="number" step="0.5" min="0.5"
+                                   class="w-full p-2 rounded bg-gray-800 border border-gray-600 focus:outline-none focus:border-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-400 mb-1">Monitor every (h)</label>
+                            <input x-model="settings.form.check_interval_hours" type="number" step="1" min="1"
+                                   class="w-full p-2 rounded bg-gray-800 border border-gray-600 focus:outline-none focus:border-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs text-gray-400 mb-1">RD poll timeout (s)</label>
+                            <input x-model="settings.form.poll_timeout" type="number" step="60" min="60"
+                                   class="w-full p-2 rounded bg-gray-800 border border-gray-600 focus:outline-none focus:border-blue-500">
+                        </div>
+                    </div>
+                    <p class="text-xs text-gray-500">Secrets (Real-Debrid key, aria2 secret…) live in <code>.env</code> and can't be edited here.
+                        Changes apply from the next download — no restart needed.</p>
+                    <div class="flex justify-end gap-2 pt-1">
+                        <button @click="settings.open = false" class="px-4 py-2 bg-gray-700 rounded hover:bg-gray-600 transition">Cancel</button>
+                        <button @click="saveSettings()" :disabled="settings.saving"
+                                class="px-5 py-2 bg-blue-600 rounded font-bold hover:bg-blue-700 transition disabled:opacity-50">
+                            <span x-text="settings.saving ? 'Saving…' : 'Save'"></span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Logs -->
         <div class="flex-grow flex flex-col glass-panel rounded-lg shadow-2xl overflow-hidden mb-4 min-h-0">
             <div class="bg-gray-800 bg-opacity-80 px-4 py-2 text-xs text-gray-400 border-b border-gray-700 flex justify-between items-center">
@@ -308,7 +406,8 @@
             return {
                 query: '', results: [], logs: [], status: {}, logInterval: null,
                 downloads: [], failures: [], retrying: false,
-                monitored: [], destFolder: '',
+                monitored: [], destFolder: '', tasks: [],
+                settings: { open: false, saving: false, form: {} },
                 searching: false, downloading: false,
                 view: 'catalog',
                 detail: { loading: false, data: null, item: null },
@@ -472,6 +571,64 @@
                 },
                 countBy(status) { return this.downloads.filter(d => d.status === status).length; },
 
+                // ── Active tasks (cancel) ───────────────────────────────────
+                async fetchTasks() {
+                    try {
+                        this.tasks = await (await fetch('/api/tasks')).json();
+                    } catch (e) { /* keep last known list */ }
+                },
+                async cancelTask(t) {
+                    if (!confirm(`Cancel "${t.name}"? Files already sent to aria2 keep downloading.`)) return;
+                    try { await fetch(`/api/tasks/${t.id}/cancel`, { method: 'POST' }); } catch (e) {}
+                    this.fetchTasks();
+                },
+                async cancelDownload(d) {
+                    if (!confirm(`Cancel download of "${d.name}"?`)) return;
+                    try { await fetch(`/api/downloads/${d.gid}`, { method: 'DELETE' }); } catch (e) {}
+                    this.fetchDownloads();
+                },
+
+                // ── Settings editor ─────────────────────────────────────────
+                async openSettings() {
+                    try {
+                        const c = await (await fetch('/api/config')).json();
+                        this.settings.form = {
+                            preferred_quality: (c.torrentio?.preferred_quality || []).join(', '),
+                            exclude_keywords: (c.torrentio?.exclude_keywords || []).join(', '),
+                            library_folders: (c.aria2?.library_folders || []).join(', '),
+                            default_movie_folder: c.aria2?.default_movie_folder || '',
+                            default_series_folder: c.aria2?.default_series_folder || '',
+                            poll_timeout: c.aria2?.poll_timeout ?? 900,
+                            delay_between_episodes: c.download?.delay_between_episodes ?? 1.5,
+                            check_interval_hours: c.monitoring?.check_interval_hours ?? 6,
+                        };
+                        this.settings.open = true;
+                    } catch (e) { this.pushLog('❌ Could not load settings: ' + e); }
+                },
+                async saveSettings() {
+                    const f = this.settings.form;
+                    const list = s => s.split(',').map(x => x.trim()).filter(Boolean);
+                    this.settings.saving = true;
+                    try {
+                        const res = await (await fetch('/api/config', {
+                            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                torrentio: { preferred_quality: list(f.preferred_quality),
+                                             exclude_keywords: list(f.exclude_keywords) },
+                                aria2: { library_folders: list(f.library_folders),
+                                         default_movie_folder: f.default_movie_folder,
+                                         default_series_folder: f.default_series_folder,
+                                         poll_timeout: f.poll_timeout },
+                                download: { delay_between_episodes: f.delay_between_episodes },
+                                monitoring: { check_interval_hours: f.check_interval_hours },
+                            })
+                        })).json();
+                        this.pushLog((res.ok ? '⚙️ ' : '❌ ') + res.message);
+                        if (res.ok) { this.settings.open = false; this.fetchStatus(); }
+                    } catch (e) { this.pushLog('❌ Save failed: ' + e); }
+                    this.settings.saving = false;
+                },
+
                 // ── New-episode monitoring ──────────────────────────────────
                 async fetchMonitored() {
                     try {
@@ -576,9 +733,11 @@
                     this.fetchDownloads();
                     this.fetchFailures();
                     this.fetchMonitored();
+                    this.fetchTasks();
                     this.logInterval = setInterval(() => {
                         this.fetchLogs();
                         this.fetchDownloads();
+                        this.fetchTasks();
                         if (Math.random() > 0.7) this.fetchFailures();
                         if (Math.random() > 0.8) this.fetchMonitored();
                         if (Math.random() > 0.9) this.fetchStatus();

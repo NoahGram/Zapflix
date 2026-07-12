@@ -20,7 +20,8 @@ from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from backend import (DATA_DIR, load_config, process_download_task,
-                     resume_pending_deliveries, sweep_aria2_errors)
+                     resume_pending_deliveries, sweep_aria2_errors,
+                     register_task, finish_task, TaskCancelled)
 from cinemeta import get_series_metadata
 
 MONITORED_FILE = DATA_DIR / "monitored.json"
@@ -129,6 +130,7 @@ def check_all(log_callback: Callable[[str], None] = lambda m: None) -> Optional[
     if not _check_lock.acquire(blocking=False):
         log_callback("⏳ Monitoring check already running — skipped.")
         return None
+    task_id, cancel = register_task("Monitoring check", "monitor")
     try:
         # First: finish anything a crash/reboot interrupted, and surface
         # aria2 downloads that errored since we queued them.
@@ -145,6 +147,9 @@ def check_all(log_callback: Callable[[str], None] = lambda m: None) -> Optional[
         results: dict[str, int] = {}
 
         for show in shows:
+            if cancel.is_set():
+                log_callback("🛑 Monitoring check cancelled.")
+                break
             imdb_id = show["imdb_id"]
             try:
                 series = get_series_metadata(imdb_id)
@@ -178,7 +183,7 @@ def check_all(log_callback: Callable[[str], None] = lambda m: None) -> Optional[
             selection = [{"season": s, "episodes": eps} for s, eps in sorted(by_season.items())]
 
             result = process_download_task(imdb_id, "series", log_callback, selection,
-                                           folder=show.get("folder"))
+                                           folder=show.get("folder"), cancel=cancel)
             grabbed = (result or {}).get("grabbed", [])
             if grabbed:
                 note_grabbed(imdb_id, grabbed)
@@ -197,6 +202,7 @@ def check_all(log_callback: Callable[[str], None] = lambda m: None) -> Optional[
             log_callback("🔔 Monitoring done — nothing new.")
         return results
     finally:
+        finish_task(task_id)
         _check_lock.release()
 
 

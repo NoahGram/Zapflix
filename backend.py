@@ -23,7 +23,7 @@ logger.setLevel(logging.INFO)
 
 # Bump on every release — shown in the UI header, /api/status, and task logs
 # so a stale Docker image is immediately obvious.
-VERSION = "1.7.0"
+VERSION = "1.8.0"
 
 # Matches real episode files: "S01E02", "s1e2", or "01x08" style markers.
 # Anything without one (gag reels, VFX breakdowns...) is pack bonus content.
@@ -227,6 +227,127 @@ def _target_subdir(base_dir: str, content_name: str, start_type: str, fname: str
     return os.path.join(base_dir, content_name, s_dir)
 
 
+# ─── UI config editor ──────────────────────────────────────────────────────────
+
+# Only these config.json fields are editable from the web UI. Secrets stay in
+# .env and are never read or written here.
+EDITABLE_CONFIG: dict[str, dict[str, type]] = {
+    "torrentio": {"preferred_quality": list, "exclude_keywords": list},
+    "aria2": {"library_folders": list, "default_movie_folder": str,
+              "default_series_folder": str, "poll_timeout": float},
+    "download": {"delay_between_episodes": float},
+    "monitoring": {"check_interval_hours": float},
+}
+
+
+def get_editable_config() -> dict:
+    cfg = load_config()
+    return {sec: {k: cfg.get(sec, {}).get(k) for k in keys}
+            for sec, keys in EDITABLE_CONFIG.items()}
+
+
+def update_editable_config(data: dict) -> tuple[bool, str]:
+    """Merge whitelisted fields into config.json and write it back.
+
+    Written IN PLACE (truncate + write), not tmp+rename: config.json is
+    bind-mounted as a single file in Docker, and replacing it would detach
+    the file from the host copy.
+    """
+    raw = {}
+    if CONFIG_FILE.exists():
+        with open(CONFIG_FILE) as f:
+            raw = json.load(f)
+
+    changed = []
+    for sec, keys in EDITABLE_CONFIG.items():
+        incoming = data.get(sec)
+        if not isinstance(incoming, dict):
+            continue
+        for key, want_type in keys.items():
+            if key not in incoming:
+                continue
+            val = incoming[key]
+            if want_type is list:
+                if not isinstance(val, list):
+                    return False, f"{sec}.{key} must be a list"
+                val = [str(v).strip() for v in val if str(v).strip()]
+            elif want_type is float:
+                try:
+                    val = float(val)
+                except (TypeError, ValueError):
+                    return False, f"{sec}.{key} must be a number"
+                if val <= 0:
+                    return False, f"{sec}.{key} must be positive"
+                if val == int(val):
+                    val = int(val)
+            else:
+                val = str(val).strip()
+            raw.setdefault(sec, {})[key] = val
+            changed.append(f"{sec}.{key}")
+
+    if not changed:
+        return False, "Nothing to update"
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(raw, f, indent=4)
+    return True, f"Saved: {', '.join(changed)}"
+
+
+# ─── Running-task registry (cancellation) ──────────────────────────────────────
+
+class TaskCancelled(Exception):
+    """Raised inside a download task when the user hits Cancel."""
+
+
+_tasks_lock = threading.Lock()
+ACTIVE_TASKS: dict[str, dict] = {}
+
+
+def register_task(name: str, task_type: str) -> tuple[str, threading.Event]:
+    """Register a running task; returns (task_id, cancel_event)."""
+    tid = uuid.uuid4().hex[:8]
+    ev = threading.Event()
+    with _tasks_lock:
+        ACTIVE_TASKS[tid] = {"id": tid, "name": name, "type": task_type,
+                             "started": int(time.time()), "cancel": ev}
+    return tid, ev
+
+
+def update_task_name(tid: Optional[str], name: str):
+    if not tid:
+        return
+    with _tasks_lock:
+        if tid in ACTIVE_TASKS:
+            ACTIVE_TASKS[tid]["name"] = name
+
+
+def finish_task(tid: str):
+    with _tasks_lock:
+        ACTIVE_TASKS.pop(tid, None)
+
+
+def cancel_task(tid: str) -> bool:
+    with _tasks_lock:
+        task = ACTIVE_TASKS.get(tid)
+        if task:
+            task["cancel"].set()
+            return True
+    return False
+
+
+def list_tasks() -> list[dict]:
+    with _tasks_lock:
+        return [{k: v for k, v in t.items() if k != "cancel"}
+                | {"cancelling": t["cancel"].is_set()}
+                for t in ACTIVE_TASKS.values()]
+
+
+def _check_cancel(cancel: Optional[threading.Event]):
+    """Cooperative cancellation point — threads can't be killed, so the
+    download/sync loops call this between steps."""
+    if cancel is not None and cancel.is_set():
+        raise TaskCancelled()
+
+
 # ─── Library folder routing ────────────────────────────────────────────────────
 
 def _content_root(config: dict, folder: Optional[str], start_type: str) -> str:
@@ -415,6 +536,8 @@ def process_download_task(
     log_callback: Callable[[str], None] = lambda msg: None,
     selection: Union[str, list, None] = None,
     folder: Optional[str] = None,  # library subfolder (None = type default)
+    cancel: Optional[threading.Event] = None,
+    task_id: Optional[str] = None,
 ):
     """Background task to handle the full download process."""
     try:
@@ -460,7 +583,9 @@ def process_download_task(
                 log_callback(f"❌ Could not find metadata for {imdb_id}")
                 return
 
+            update_task_name(task_id, movie.name)
             log_callback(f"🎬 Processing Movie: {movie.name} ({movie.year})")
+            _check_cancel(cancel)
             streams = torrentio.get_movie_streams(imdb_id)
             selected = torrentio.select_best_stream(streams, profile)
 
@@ -474,6 +599,7 @@ def process_download_task(
             year = str(movie.year).split("-")[0].split("–")[0].strip()
             content_name = f"{movie.name} ({year})"
 
+            _check_cancel(cancel)
             # Fast path: cached stream + aria2 -> instant direct link
             if aria2_client and selected.cached and selected.resolve_url:
                 if _deliver_cached(selected, aria2_client, base_dir, content_name, "movie", log_callback):
@@ -487,7 +613,7 @@ def process_download_task(
             record_torrent(rd_client.torrent_id(selected.info_hash), content_name, "movie", folder)
             if aria2_client:
                 log_callback("⏳ Waiting for RD to cache...")
-                sync_rd_to_aria2(rd_client, aria2_client, content_name, "movie", config, log_callback, base_dir, folder)
+                sync_rd_to_aria2(rd_client, aria2_client, content_name, "movie", config, log_callback, base_dir, folder, cancel)
             log_callback("✨ Task completed!")
             return {"type": "movie", "delivered": True}
 
@@ -498,6 +624,7 @@ def process_download_task(
                 return
 
             episodes = _filter_episodes(series, selection)
+            update_task_name(task_id, series.name)
             log_callback(f"📺 Processing Series: {series.name} — {len(episodes)} episode(s) selected")
 
             covered_hashes: set[str] = set()
@@ -510,6 +637,7 @@ def process_download_task(
             no_stream = 0
 
             for i, ep in enumerate(episodes):
+                _check_cancel(cancel)
                 if ep.season in covered_seasons:
                     pack_covered += 1
                     continue
@@ -576,7 +704,7 @@ def process_download_task(
             # Packs and uncached torrents are delivered by the sync stage
             if aria2_client and rd_queued:
                 log_callback("⏳ Syncing RD torrents to aria2 (instant for cached packs)...")
-                sync_rd_to_aria2(rd_client, aria2_client, series.name, "series", config, log_callback, base_dir, folder)
+                sync_rd_to_aria2(rd_client, aria2_client, series.name, "series", config, log_callback, base_dir, folder, cancel)
 
             log_callback("✨ Task completed!")
             # Outcome per selected episode — the monitor uses this to update
@@ -588,6 +716,9 @@ def process_download_task(
                     "no_stream": sorted(no_stream_keys)}
 
         log_callback("✨ Task completed!")
+    except TaskCancelled:
+        log_callback("🛑 Task cancelled. Files already handed to aria2 keep downloading "
+                     "(cancel them in the Downloads panel if needed).")
     except Exception as e:
         log_callback(f"❌ CRITICAL ERROR: {str(e)}")
         log_callback(traceback.format_exc())
@@ -595,7 +726,7 @@ def process_download_task(
 
 
 def sync_rd_to_aria2(rd_client, aria2_client, content_name, start_type, config,
-                     log_callback, base_dir=None, folder=None):
+                     log_callback, base_dir=None, folder=None, cancel=None):
     """Poll RD to completion, then push each file to aria2 exactly once.
 
     Used for uncached torrents that RD must download first. Sent links are
@@ -621,9 +752,11 @@ def sync_rd_to_aria2(rd_client, aria2_client, content_name, start_type, config,
         skipped_extras = 0
 
         for tid in pending:
+            _check_cancel(cancel)
             start = time.time()
             info = None
             while time.time() - start < timeout:
+                _check_cancel(cancel)
                 info = rd_client.get_torrent_info(tid)
                 if not info:
                     break
@@ -646,7 +779,7 @@ def sync_rd_to_aria2(rd_client, aria2_client, content_name, start_type, config,
 
             sent, failed, skipped = _deliver_rd_links(
                 info, content_name, start_type, base_dir, folder,
-                rd_client, aria2_client, log_callback)
+                rd_client, aria2_client, log_callback, cancel)
             total_sent += sent
             total_failed += failed
             skipped_extras += skipped
@@ -659,12 +792,18 @@ def sync_rd_to_aria2(rd_client, aria2_client, content_name, start_type, config,
         if total_failed:
             summary += f" | ❌ {total_failed} failed (retry from the Failed files panel)"
         log_callback(summary)
+    except TaskCancelled:
+        # A cancelled task must not be silently finished by the reconciler —
+        # retire its remaining journaled torrents.
+        for tid in rd_client.get_pending_torrents():
+            mark_torrent_done(tid)
+        raise
     except Exception as e:
         log_callback(f"❌ Sync Error: {str(e)}")
 
 
 def _deliver_rd_links(info, content_name, start_type, base_dir, folder,
-                      rd_client, aria2_client, log_callback) -> tuple[int, int, int]:
+                      rd_client, aria2_client, log_callback, cancel=None) -> tuple[int, int, int]:
     """Send every not-yet-sent file of a downloaded RD torrent to aria2.
 
     Consults/updates the persistent delivery journal, so it is safe to call
@@ -673,6 +812,7 @@ def _deliver_rd_links(info, content_name, start_type, base_dir, folder,
     """
     sent = failed = skipped = 0
     for link in info.get("links", []):
+        _check_cancel(cancel)
         if link_sent(link):
             continue
 

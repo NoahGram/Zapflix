@@ -251,6 +251,16 @@ class Aria2Client:
             print(f"  ✗ Error getting aria2 status: {e}")
             return None
 
+    def remove(self, gid: str) -> bool:
+        """Cancel an active/waiting download (falls back to forceRemove)."""
+        for method in ("aria2.remove", "aria2.forceRemove"):
+            try:
+                self._call(method, [gid])
+                return True
+            except Exception:
+                continue
+        return False
+
     def list_downloads(self, max_stopped: int = 40) -> list[dict]:
         """List active, waiting, and recently finished downloads.
 
