@@ -2,8 +2,10 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import traceback
+import uuid
 from pathlib import Path
 from typing import Optional, List, Callable, Union
 
@@ -21,13 +23,20 @@ logger.setLevel(logging.INFO)
 
 # Bump on every release — shown in the UI header, /api/status, and task logs
 # so a stale Docker image is immediately obvious.
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 
 # Matches real episode files: "S01E02", "s1e2", or "01x08" style markers.
 # Anything without one (gag reels, VFX breakdowns...) is pack bonus content.
 _EPISODE_RE = re.compile(r"[Ss]\d{1,2}\s*[Ee]\d{1,3}|\b\d{1,2}x\d{2,3}\b")
 
 CONFIG_FILE = Path(__file__).parent / "config.json"
+
+# Failed deliveries live in data/ so a Docker rebuild doesn't wipe them
+# (docker-compose mounts ./data). Each entry keeps the RD link — direct
+# download URLs expire, but re-unrestricting the RD link mints a fresh one.
+DATA_DIR = Path(__file__).parent / "data"
+FAILED_FILE = DATA_DIR / "failed.json"
+_failed_lock = threading.Lock()
 
 # Load .env once at import so env vars are available to load_config().
 load_dotenv(Path(__file__).parent / ".env")
@@ -209,6 +218,96 @@ def _target_subdir(base_dir: str, content_name: str, start_type: str, fname: str
     s_match = re.search(r"[Ss](\d{1,2})", fname)
     s_dir = f"Season {int(s_match.group(1)):02d}" if s_match else ""
     return os.path.join(base_dir, content_name, s_dir)
+
+
+# ─── Failed-delivery store ─────────────────────────────────────────────────────
+
+def _read_failures() -> list[dict]:
+    try:
+        with open(FAILED_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _write_failures(items: list[dict]):
+    DATA_DIR.mkdir(exist_ok=True)
+    tmp = FAILED_FILE.with_suffix(".tmp")
+    with open(tmp, "w") as f:
+        json.dump(items, f, indent=1)
+    tmp.replace(FAILED_FILE)
+
+
+def list_failures() -> list[dict]:
+    with _failed_lock:
+        return _read_failures()
+
+
+def record_failure(content_name: str, start_type: str, rd_link: str,
+                   filename: str, reason: str):
+    """Persist a failed file delivery so the UI can offer a retry."""
+    with _failed_lock:
+        items = _read_failures()
+        for it in items:
+            if it.get("rd_link") == rd_link:  # same file failing again
+                it.update(ts=int(time.time()), reason=reason)
+                break
+        else:
+            items.append({
+                "id": uuid.uuid4().hex[:12],
+                "ts": int(time.time()),
+                "content_name": content_name,
+                "type": start_type,
+                "rd_link": rd_link,
+                "filename": filename,
+                "reason": reason,
+            })
+        _write_failures(items)
+
+
+def remove_failure(fid: Optional[str]) -> bool:
+    """Remove one entry by id, or all entries when fid is None."""
+    with _failed_lock:
+        items = _read_failures()
+        kept = [] if fid is None else [it for it in items if it.get("id") != fid]
+        _write_failures(kept)
+        return len(kept) < len(items)
+
+
+def retry_failure(fid: str, log_callback: Callable[[str], None] = lambda m: None) -> tuple[bool, str]:
+    """Re-unrestrict a failed file's RD link and hand it to aria2 again."""
+    entry = next((it for it in list_failures() if it.get("id") == fid), None)
+    if not entry:
+        return False, "Unknown failure id"
+
+    config = load_config()
+    rd_client, aria2_client = get_clients(config)
+    if not rd_client or not aria2_client:
+        return False, "Real-Debrid or aria2 unavailable — check config"
+
+    item = rd_client.unrestrict_link(entry["rd_link"])
+    if not item or not item.get("download"):
+        record_failure(entry["content_name"], entry["type"], entry["rd_link"],
+                       entry.get("filename", "?"), "unrestrict failed (retried)")
+        return False, "Unrestrict failed again — the RD torrent may be gone"
+
+    fname = item.get("filename") or entry.get("filename") or "unknown"
+
+    if entry["type"] == "series" and not _EPISODE_RE.search(fname):
+        remove_failure(fid)
+        return True, f"Skipped (bonus/extra content): {fname}"
+
+    base_dir = config.get("aria2", {}).get("download_dir", "")
+    subdir = _target_subdir(base_dir, entry["content_name"], entry["type"], fname)
+    gid = aria2_client.add_download(item["download"], directory=subdir, filename=fname)
+    if gid:
+        remove_failure(fid)
+        log_callback(f"🔁 Retry OK — sent to aria2: {fname}")
+        return True, f"Sent to aria2: {fname}"
+
+    record_failure(entry["content_name"], entry["type"], entry["rd_link"],
+                   fname, "aria2 add failed (retried)")
+    return False, "aria2 rejected the download again"
 
 
 def _deliver_cached(stream, aria2_client, base_dir, content_name, start_type, log_callback) -> bool:
@@ -457,7 +556,10 @@ def sync_rd_to_aria2(rd_client, aria2_client, content_name, start_type, config, 
                     time.sleep(2)  # transient / expired-link retry
                     item = rd_client.unrestrict_link(link)
                 if not item or not item.get("download"):
-                    log_callback("❌ Failed to unrestrict a link (skipped)")
+                    torrent_name = info.get("filename", "?")
+                    log_callback(f"❌ Failed to unrestrict a link from '{torrent_name}' — saved for retry")
+                    record_failure(content_name, start_type, link,
+                                   f"(file from {torrent_name})", "unrestrict failed")
                     total_failed += 1
                     continue
 
@@ -481,7 +583,8 @@ def sync_rd_to_aria2(rd_client, aria2_client, content_name, start_type, config, 
                     log_callback(f"🚀 Sent to aria2: {fname}")
                 else:
                     total_failed += 1
-                    log_callback(f"❌ aria2 failed for: {fname}")
+                    log_callback(f"❌ aria2 failed for: {fname} — saved for retry")
+                    record_failure(content_name, start_type, link, fname, "aria2 add failed")
 
                 time.sleep(0.5)
 
@@ -489,7 +592,7 @@ def sync_rd_to_aria2(rd_client, aria2_client, content_name, start_type, config, 
         if skipped_extras:
             summary += f" | ⏭️ {skipped_extras} extra/bonus file(s) skipped"
         if total_failed:
-            summary += f" | ❌ {total_failed} failed"
+            summary += f" | ❌ {total_failed} failed (retry from the Failed files panel)"
         log_callback(summary)
     except Exception as e:
         log_callback(f"❌ Sync Error: {str(e)}")
