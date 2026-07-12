@@ -24,5 +24,8 @@
         "auto_select_best": true,
         "dry_run": false,
         "profile": "jellyfin"
+    },
+    "monitoring": {
+        "check_interval_hours": 6
     }
 }

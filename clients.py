@@ -210,7 +210,12 @@ class Aria2Client:
         retries: int = 3,
     ) -> Optional[str]:
         """Add a download URL to aria2 with retry/backoff. Returns the GID or None."""
-        options: dict[str, str] = {}
+        # Overwrite on re-download (retries, monitor re-grabs) instead of
+        # aria2's default of creating "name.1.mkv" duplicates.
+        options: dict[str, str] = {
+            "allow-overwrite": "true",
+            "auto-file-renaming": "false",
+        }
         target_dir = directory or self.download_dir
         if target_dir:
             options["dir"] = target_dir

@@ -122,4 +122,7 @@ Zapflix/
 - **Long series**: for a whole season, a detected season pack covers the season
   in one torrent, and Torrentio queries are rate-limited to avoid throttling.
 - **aria2**: files are foldered as `<Title>/Season NN/` for Jellyfin.
+- **Monitoring**: hit 🔔 Monitor on a series and Zapflix auto-grabs new
+  episodes as they air (checked every `monitoring.check_interval_hours`,
+  default 6h; ledger in `data/monitored.json`).
 ```
