@@ -95,6 +95,10 @@ class RealDebridClient:
         """Get unique torrent IDs added this session."""
         return list(set(self._torrent_ids.values()))
 
+    def torrent_id(self, info_hash: str) -> Optional[str]:
+        """RD torrent id for a hash added this session (for the delivery journal)."""
+        return self._torrent_ids.get(info_hash.lower())
+
     def get_torrent_info(self, torrent_id: str) -> Optional[dict]:
         """Get info about a torrent on Real-Debrid."""
         try:

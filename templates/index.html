@@ -113,12 +113,22 @@
                                 <div class="mt-1 text-xs text-gray-400" x-text="(detail.data.genres||[]).join(' · ')"></div>
                                 <p class="mt-3 text-sm text-gray-300 leading-relaxed max-h-32 overflow-y-auto" x-text="detail.data.description"></p>
 
-                                <!-- Movie: single button -->
+                                <!-- Movie: destination + single button -->
                                 <template x-if="detail.data.type === 'movie'">
-                                    <button @click="startDownload()" :disabled="downloading"
-                                            class="mt-4 px-6 py-3 bg-green-600 rounded font-bold shadow hover:bg-green-700 transition disabled:opacity-50">
-                                        <span x-text="downloading ? 'Queued ✓' : '⬇ Download Movie'"></span>
-                                    </button>
+                                    <div class="mt-4 flex items-center gap-2">
+                                        <select x-show="status.library?.folders?.length" x-model="destFolder" x-effect="destFolder; $nextTick(() => $el.value = destFolder)"
+                                                title="Destination folder on the NAS"
+                                                class="px-3 py-3 rounded bg-gray-800 border border-gray-600 text-sm focus:outline-none focus:border-blue-500">
+                                            <option value="">📁 (library root)</option>
+                                            <template x-for="f in status.library?.folders || []" :key="f">
+                                                <option :value="f" x-text="'📁 ' + f"></option>
+                                            </template>
+                                        </select>
+                                        <button @click="startDownload()" :disabled="downloading"
+                                                class="px-6 py-3 bg-green-600 rounded font-bold shadow hover:bg-green-700 transition disabled:opacity-50">
+                                            <span x-text="downloading ? 'Queued ✓' : '⬇ Download Movie'"></span>
+                                        </button>
+                                    </div>
                                 </template>
                             </div>
                         </template>
@@ -135,6 +145,14 @@
                                 <span class="text-xs text-gray-400" x-text="selectedCount() + ' episode(s) selected'"></span>
                             </div>
                             <div class="flex items-center gap-2">
+                                <select x-show="status.library?.folders?.length" x-model="destFolder" x-effect="destFolder; $nextTick(() => $el.value = destFolder)"
+                                        title="Destination folder on the NAS (also used for monitored grabs)"
+                                        class="px-3 py-2 rounded bg-gray-800 border border-gray-600 text-sm focus:outline-none focus:border-blue-500">
+                                    <option value="">📁 (library root)</option>
+                                    <template x-for="f in status.library?.folders || []" :key="f">
+                                        <option :value="f" x-text="'📁 ' + f"></option>
+                                    </template>
+                                </select>
                                 <button @click="toggleMonitor()"
                                         :class="isMonitored(detail.item?.imdb_id) ? 'bg-yellow-600 hover:bg-yellow-700' : 'bg-gray-700 hover:bg-gray-600'"
                                         class="px-4 py-2 rounded font-bold shadow transition"
@@ -290,7 +308,7 @@
             return {
                 query: '', results: [], logs: [], status: {}, logInterval: null,
                 downloads: [], failures: [], retrying: false,
-                monitored: [],
+                monitored: [], destFolder: '',
                 searching: false, downloading: false,
                 view: 'catalog',
                 detail: { loading: false, data: null, item: null },
@@ -363,6 +381,10 @@
                     this.view = 'detail';
                     this.detail = { loading: true, data: null, item };
                     this.selected = {}; this.expanded = {};
+                    // Preselect the configured library folder for this type
+                    this.destFolder = (item.type === 'movie'
+                        ? this.status.library?.default_movie
+                        : this.status.library?.default_series) || '';
                     try {
                         const res = await fetch(`/api/meta/${item.type}/${item.imdb_id}`);
                         const data = await res.json();
@@ -432,7 +454,8 @@
                     try {
                         await fetch('/api/download', {
                             method: 'POST', headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ imdb_id: d.imdb_id, type: d.type, selection })
+                            body: JSON.stringify({ imdb_id: d.imdb_id, type: d.type, selection,
+                                                   folder: this.destFolder })
                         });
                     } catch (e) { this.pushLog("❌ Request failed: " + e); }
                     setTimeout(() => this.downloading = false, 2500);
@@ -466,7 +489,9 @@
                             await fetch(`/api/monitored/${id}`, { method: 'DELETE' });
                             this.pushLog(`🔕 Stopped monitoring ${this.detail.item.name}`);
                         } else {
-                            const res = await (await fetch(`/api/monitored/${id}`, { method: 'POST' })).json();
+                            const res = await (await fetch(
+                                `/api/monitored/${id}?folder=${encodeURIComponent(this.destFolder)}`,
+                                { method: 'POST' })).json();
                             this.pushLog((res.ok ? '🔔 ' : '❌ ') + res.message);
                         }
                     } catch (e) { this.pushLog('❌ Monitor request failed: ' + e); }
