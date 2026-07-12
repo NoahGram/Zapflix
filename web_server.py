@@ -14,7 +14,9 @@ from cinemeta import search_all, get_meta
 import threading
 
 from backend import (process_download_task, load_config, VERSION,
-                     list_failures, remove_failure, retry_failure)
+                     list_failures, remove_failure, retry_failure,
+                     register_task, finish_task, cancel_task, list_tasks,
+                     get_editable_config, update_editable_config)
 from monitor import (list_monitored, add_monitored, remove_monitored,
                      note_grabbed, check_all, monitor_loop)
 from clients import Aria2Client
@@ -71,9 +73,14 @@ def meta(content_type: str, imdb_id: str):
 def _download_and_note(imdb_id: str, type: str, selection, folder):
     """Run a download and record grabbed episodes in the monitor ledger, so
     manual downloads of a monitored show aren't re-grabbed by the checker."""
-    result = process_download_task(imdb_id, type, distinct_logs, selection, folder)
-    if result and result.get("type") == "series":
-        note_grabbed(imdb_id, result.get("grabbed", []))
+    task_id, cancel = register_task(imdb_id, type)
+    try:
+        result = process_download_task(imdb_id, type, distinct_logs, selection,
+                                       folder, cancel, task_id)
+        if result and result.get("type") == "series":
+            note_grabbed(imdb_id, result.get("grabbed", []))
+    finally:
+        finish_task(task_id)
 
 @app.post("/api/download")
 async def start_download(req: DownloadRequest, background_tasks: BackgroundTasks):
@@ -120,6 +127,40 @@ def downloads():
     order = {"active": 0, "waiting": 1, "paused": 2, "error": 3, "complete": 4, "removed": 5}
     out.sort(key=lambda x: order.get(x["status"], 9))
     return out
+
+@app.get("/api/tasks")
+def tasks():
+    """Currently running download/monitor tasks."""
+    return sorted(list_tasks(), key=lambda t: t["started"])
+
+@app.post("/api/tasks/{tid}/cancel")
+def task_cancel(tid: str):
+    ok = cancel_task(tid)
+    if ok:
+        distinct_logs("🛑 Cancel requested — the task stops at its next step...")
+    return {"ok": ok}
+
+@app.delete("/api/downloads/{gid}")
+def download_cancel(gid: str):
+    """Cancel a single aria2 transfer."""
+    config = load_config()
+    a_cfg = config.get("aria2", {})
+    client = Aria2Client(host=a_cfg.get("host", "http://localhost"),
+                         port=a_cfg.get("port", 6800), secret=a_cfg.get("secret", ""))
+    ok = client.remove(gid)
+    distinct_logs("🛑 aria2 download cancelled" if ok else "❌ Could not cancel aria2 download")
+    return {"ok": ok}
+
+@app.get("/api/config")
+def config_get():
+    """Editable (non-secret) settings for the UI's config editor."""
+    return get_editable_config()
+
+@app.put("/api/config")
+def config_put(data: dict):
+    ok, message = update_editable_config(data)
+    distinct_logs(("⚙️ " if ok else "❌ ") + message)
+    return {"ok": ok, "message": message}
 
 @app.get("/api/failures")
 def failures():
