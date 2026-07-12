@@ -68,6 +68,30 @@ ARIA2_DOWNLOAD_DIR=/downloads
 `config.json` holds the non-secret preferences (quality, delays, profile) —
 the defaults are sensible, tune later if you like.
 
+### Library folders (optional but recommended)
+
+If your media folder is organised in subfolders (e.g. `Theater/movies`,
+`Theater/series`, `Theater/anime`), tell Zapflix about them in the `aria2`
+section of **`config.json`**:
+
+```json
+"aria2": {
+    "...": "...existing keys stay as they are...",
+    "library_folders": ["movies", "series", "pokemon", "anime"],
+    "default_movie_folder": "movies",
+    "default_series_folder": "series"
+}
+```
+
+- The UI then shows a **📁 destination dropdown** on every movie/series page,
+  preselected per type; monitored shows remember their folder.
+- Folder names are relative to `ARIA2_DOWNLOAD_DIR` and files are saved as
+  `<folder>/<Title>/Season NN/…`. aria2 creates missing folders by itself.
+- This is purely a **Zapflix setting** — the aria2 container/config in Step 2
+  needs no changes for it.
+- Leave the keys out (or empty) and everything lands in the library root,
+  like before.
+
 ---
 
 ## Step 2 — Set up aria2
@@ -155,6 +179,9 @@ This matches a real working setup — two containers on the NAS:
   ARIA2_PORT=6801                    # the *NAS* port you mapped for aria2
   ARIA2_DOWNLOAD_DIR=/downloads      # aria2's container path = Theater folder
   ```
+- If your Theater folder has subfolders (`movies/`, `series/`, `anime/`...),
+  add them to the `aria2` section of `config.json` — see **Library folders**
+  in Step 1. No changes to the aria2 container needed.
 - In the UGREEN Docker app: **Project → Create → pick the folder** (it uses the
   repo's `docker-compose.yml`) → Deploy
 - Open `http://<NAS-IP>:8000`
