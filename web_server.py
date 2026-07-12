@@ -11,7 +11,8 @@ import time
 import os
 
 from cinemeta import search_all, get_meta
-from backend import process_download_task, load_config, VERSION
+from backend import (process_download_task, load_config, VERSION,
+                     list_failures, remove_failure, retry_failure)
 from clients import Aria2Client
 
 app = FastAPI(title="Zapflix Web")
@@ -107,6 +108,27 @@ async def downloads():
     order = {"active": 0, "waiting": 1, "paused": 2, "error": 3, "complete": 4, "removed": 5}
     out.sort(key=lambda x: order.get(x["status"], 9))
     return out
+
+@app.get("/api/failures")
+async def failures():
+    """Failed file deliveries (persisted) — the UI's Failed files panel."""
+    return sorted(list_failures(), key=lambda x: x.get("ts", 0), reverse=True)
+
+@app.post("/api/failures/{fid}/retry")
+async def failure_retry(fid: str):
+    ok, message = retry_failure(fid, distinct_logs)
+    if not ok:
+        distinct_logs(f"❌ Retry failed: {message}")
+    return {"ok": ok, "message": message}
+
+@app.delete("/api/failures/{fid}")
+async def failure_dismiss(fid: str):
+    return {"ok": remove_failure(fid)}
+
+@app.delete("/api/failures")
+async def failures_clear():
+    remove_failure(None)
+    return {"ok": True}
 
 @app.get("/api/status")
 async def status():

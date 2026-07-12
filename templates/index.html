@@ -203,6 +203,40 @@
             </div>
         </div>
 
+        <!-- Failed files (retryable) -->
+        <div class="mb-6 glass-panel rounded-lg shadow-2xl overflow-hidden border border-red-900" x-show="failures.length > 0" x-cloak>
+            <div class="bg-red-900 bg-opacity-30 px-4 py-2 text-xs text-red-300 border-b border-red-900 flex justify-between items-center">
+                <span>FAILED FILES <span class="text-red-400 font-bold" x-text="'· ' + failures.length"></span></span>
+                <span class="space-x-3">
+                    <button @click="retryAllFailures()" :disabled="retrying"
+                            class="text-blue-300 hover:text-blue-100 transition font-semibold disabled:opacity-50">
+                        <span x-text="retrying ? 'Retrying…' : '🔁 Retry all'"></span>
+                    </button>
+                    <button @click="clearFailures()" class="text-gray-400 hover:text-white transition">Clear all</button>
+                </span>
+            </div>
+            <div class="p-3 space-y-2 max-h-60 overflow-y-auto">
+                <template x-for="f in failures" :key="f.id">
+                    <div class="flex justify-between items-center gap-3 text-xs">
+                        <div class="min-w-0">
+                            <div class="truncate text-gray-200" x-text="f.filename" :title="f.filename"></div>
+                            <div class="text-gray-500">
+                                <span x-text="f.content_name"></span> ·
+                                <span class="text-red-400" x-text="f.reason"></span> ·
+                                <span x-text="new Date(f.ts * 1000).toLocaleString()"></span>
+                            </div>
+                        </div>
+                        <div class="whitespace-nowrap space-x-2">
+                            <button @click="retryFailure(f)" :disabled="retrying"
+                                    class="px-2 py-1 bg-blue-600 rounded font-semibold hover:bg-blue-700 transition disabled:opacity-50">Retry</button>
+                            <button @click="dismissFailure(f)"
+                                    class="px-2 py-1 bg-gray-700 rounded hover:bg-gray-600 transition" title="Dismiss">✕</button>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+
         <!-- Logs -->
         <div class="flex-grow flex flex-col glass-panel rounded-lg shadow-2xl overflow-hidden mb-4 min-h-0">
             <div class="bg-gray-800 bg-opacity-80 px-4 py-2 text-xs text-gray-400 border-b border-gray-700 flex justify-between items-center">
@@ -224,7 +258,7 @@
         function app() {
             return {
                 query: '', results: [], logs: [], status: {}, logInterval: null,
-                downloads: [],
+                downloads: [], failures: [], retrying: false,
                 searching: false, downloading: false,
                 view: 'catalog',
                 detail: { loading: false, data: null, item: null },
@@ -382,6 +416,42 @@
                     } catch (e) { /* aria2 unreachable — keep last known list */ }
                 },
                 countBy(status) { return this.downloads.filter(d => d.status === status).length; },
+
+                // ── Failed files panel ──────────────────────────────────────
+                async fetchFailures() {
+                    try {
+                        this.failures = await (await fetch('/api/failures')).json();
+                    } catch (e) { /* backend unreachable — keep last known list */ }
+                },
+                async retryFailure(f) {
+                    this.retrying = true;
+                    try {
+                        const res = await (await fetch(`/api/failures/${f.id}/retry`, { method: 'POST' })).json();
+                        this.pushLog((res.ok ? '🔁 ' : '❌ ') + res.message);
+                    } catch (e) { this.pushLog('❌ Retry request failed: ' + e); }
+                    this.retrying = false;
+                    this.fetchFailures();
+                },
+                async retryAllFailures() {
+                    this.retrying = true;
+                    for (const f of [...this.failures]) {
+                        try {
+                            const res = await (await fetch(`/api/failures/${f.id}/retry`, { method: 'POST' })).json();
+                            this.pushLog((res.ok ? '🔁 ' : '❌ ') + res.message);
+                        } catch (e) { this.pushLog('❌ Retry request failed: ' + e); }
+                    }
+                    this.retrying = false;
+                    this.fetchFailures();
+                },
+                async dismissFailure(f) {
+                    try { await fetch(`/api/failures/${f.id}`, { method: 'DELETE' }); } catch (e) {}
+                    this.fetchFailures();
+                },
+                async clearFailures() {
+                    if (!confirm('Clear all failed entries? They can no longer be retried afterwards.')) return;
+                    try { await fetch('/api/failures', { method: 'DELETE' }); } catch (e) {}
+                    this.fetchFailures();
+                },
                 fmtBytes(n) {
                     if (!n && n !== 0) return '?';
                     const u = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -412,9 +482,11 @@
                     if (this.logInterval) return;
                     this.fetchLogs();
                     this.fetchDownloads();
+                    this.fetchFailures();
                     this.logInterval = setInterval(() => {
                         this.fetchLogs();
                         this.fetchDownloads();
+                        if (Math.random() > 0.7) this.fetchFailures();
                         if (Math.random() > 0.9) this.fetchStatus();
                     }, 2000);
                 }
