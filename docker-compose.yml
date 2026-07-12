@@ -1,9 +1,11 @@
 version: '3.8'
 
+name: zapflix
+
 services:
   downloader:
     build: .
-    container_name: torrent-downloader-web
+    container_name: zapflix-web
     restart: unless-stopped
     ports:
       - "8000:8000"

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-TorrentDownloader - Bulk download movies and series from Stremio/Torrentio.
+Zapflix - Bulk download movies and series from Stremio/Torrentio.
 
 Automates the process of finding and downloading entire series or movies by:
 1. Searching via Cinemeta (Stremio's metadata provider)
@@ -699,7 +699,7 @@ Examples:
     # Banner
     console.print(
         Panel(
-            "[bold cyan]TorrentDownloader[/bold cyan]\n"
+            "[bold cyan]Zapflix[/bold cyan]\n"
             "[dim]Bulk download movies & series from Stremio/Torrentio[/dim]",
             border_style="cyan",
         )

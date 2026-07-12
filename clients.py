@@ -179,7 +179,7 @@ class Aria2Client:
 
         payload = {
             "jsonrpc": "2.0",
-            "id": "torrentdownloader",
+            "id": "zapflix",
             "method": method,
             "params": params,
         }

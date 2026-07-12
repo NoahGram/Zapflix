@@ -1,6 +1,6 @@
 # Installation Guide
 
-Get TorrentDownloader running on a PC, any server, or a NAS (UGREEN example
+Get Zapflix running on a PC, any server, or a NAS (UGREEN example
 included). The flow is always the same:
 
 > **download codebase → put it on the machine → add your API keys → set up aria2 → done**
@@ -8,7 +8,7 @@ included). The flow is always the same:
 ## How the pieces fit
 
 ```
-You (browser) ──► TorrentDownloader web UI (port 8000)
+You (browser) ──► Zapflix web UI (port 8000)
                         │
                         ├─► Cinemeta ........ search & metadata (posters, episodes)
                         ├─► Torrentio ....... finds torrents, marks [RD+] cached
@@ -18,7 +18,7 @@ You (browser) ──► TorrentDownloader web UI (port 8000)
                                 └─► /downloads   →  your media folder (Jellyfin etc.)
 ```
 
-TorrentDownloader itself stores nothing — aria2 does the actual downloading,
+Zapflix itself stores nothing — aria2 does the actual downloading,
 so aria2 must run **on the machine that owns the storage** (your NAS/server).
 The web UI can run on the same machine or a different one.
 
@@ -43,8 +43,8 @@ The web UI can run on the same machine or a different one.
 ## Step 1 — Get the codebase & add your keys
 
 ```bash
-git clone https://github.com/NoahGram/TorrentDownloader.git
-cd TorrentDownloader
+git clone https://github.com/NoahGram/Zapflix.git
+cd Zapflix
 cp .env.example .env
 cp config.example.json config.json
 ```
@@ -112,7 +112,7 @@ Then in `.env`: `ARIA2_HOST=http://127.0.0.1`, `ARIA2_DOWNLOAD_DIR=` the same
 
 ---
 
-## Step 3 — Run TorrentDownloader
+## Step 3 — Run Zapflix
 
 ### Option A — Docker (server / NAS)
 
@@ -145,9 +145,9 @@ This matches a real working setup — two containers on the NAS:
 - Port: `6800` (or another, e.g. `6801`) → `6800`
 - Environment: `RPC_SECRET=<your secret>`
 
-**2. TorrentDownloader** — created as a Docker **Project** (compose):
+**2. Zapflix** — created as a Docker **Project** (compose):
 - Put the whole codebase in a shared folder, e.g.
-  `Shared folder/docker/TorrentDownloader/`
+  `Shared folder/docker/Zapflix/`
 - Create `.env` and `config.json` in that same folder (Step 1)
 - In `.env` point at the NAS itself:
   ```ini
@@ -164,14 +164,14 @@ This matches a real working setup — two containers on the NAS:
 The container bakes the code in at build time, so after pulling new code you
 must **rebuild**, not just restart:
 
-1. Replace the codebase files in `Shared folder/docker/TorrentDownloader/`
+1. Replace the codebase files in `Shared folder/docker/Zapflix/`
    with the new version (or `git pull` over SSH)
 2. Make sure `.env` exists next to `docker-compose.yml` (new requirement —
    older versions kept everything in `config.json`)
 3. Rebuild the project: in the UGREEN Docker app rebuild/redeploy the project,
    or over SSH:
    ```bash
-   cd /volume1/docker/TorrentDownloader
+   cd /volume1/docker/Zapflix
    docker compose up --build -d
    ```
 

@@ -16,12 +16,12 @@ from clients import RealDebridClient, Aria2Client, AddResult
 from profiles import QualityProfile
 
 # Setup logging
-logger = logging.getLogger("TorrentDownloader")
+logger = logging.getLogger("Zapflix")
 logger.setLevel(logging.INFO)
 
 # Bump on every release — shown in the UI header, /api/status, and task logs
 # so a stale Docker image is immediately obvious.
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 # Matches real episode files: "S01E02", "s1e2", or "01x08" style markers.
 # Anything without one (gag reels, VFX breakdowns...) is pack bonus content.

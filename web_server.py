@@ -14,7 +14,7 @@ from cinemeta import search_all, get_meta
 from backend import process_download_task, load_config, VERSION
 from clients import Aria2Client
 
-app = FastAPI(title="TorrentDownloader Web")
+app = FastAPI(title="Zapflix Web")
 
 # Simple in-memory log storage for frontend polling
 logs = collections.deque(maxlen=200)

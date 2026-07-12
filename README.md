@@ -1,4 +1,4 @@
-# TorrentDownloader
+# Zapflix
 
 Search for a movie or series, click download, and it lands on your NAS — via
 **Real-Debrid** (cloud caching) + **aria2** (NAS downloader), ready for Jellyfin.
@@ -101,7 +101,7 @@ python download.py --imdb tt0903747 --season 2-4
 ## File Structure
 
 ```
-TorrentDownloader/
+Zapflix/
 ├── web_server.py      # FastAPI web UI + REST API
 ├── backend.py         # Orchestration: Torrentio → RD → aria2 (+ env config)
 ├── download.py        # CLI entry point
