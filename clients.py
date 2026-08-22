@@ -14,6 +14,24 @@ from typing import Optional
 from torrentio import TorrentStream
 
 
+# Real-Debrid API error codes worth naming in the UI (api.real-debrid.com docs).
+RD_ERRORS = {
+    -1: "internal RD error", 4: "method not allowed", 5: "slow down (rate limited)",
+    6: "resource unreachable", 7: "resource unavailable",
+    8: "bad token — check RD_API_KEY", 9: "permission denied",
+    16: "unsupported hoster", 17: "hoster in maintenance",
+    18: "hoster limit reached", 19: "hoster temporarily unavailable",
+    21: "too many active downloads", 22: "IP address not allowed",
+    23: "traffic exhausted", 24: "file unavailable", 25: "service unavailable",
+    34: "too many requests — rate limited", 35: "infringing file (DMCA)",
+    36: "fair usage limit reached",
+}
+
+# Transient failures worth backing off and retrying; everything else is
+# permanent for this torrent (no point retrying a DMCA'd file 5 times).
+RD_RETRYABLE = {-1, 5, 6, 7, 17, 19, 21, 25, 34}
+
+
 class AddResult(Enum):
     """Result of attempting to add a torrent."""
     SUCCESS = "success"          # Newly added
@@ -112,22 +130,47 @@ class RealDebridClient:
             print(f"  ✗ Error getting torrent info: {e}")
             return None
 
-    def unrestrict_link(self, link: str) -> Optional[dict]:
+    def unrestrict_link(self, link: str, retries: int = 3) -> tuple[Optional[dict], str]:
         """Unrestrict a link to get a direct download URL.
 
-        Returns dict with 'download' (URL) and 'filename' keys, or None.
+        Returns (item, error): item is a dict with 'download' and 'filename'
+        on success, else None and a human-readable reason. Retryable RD errors
+        (rate limits, hoster hiccups, 5xx) get exponential backoff; permanent
+        ones (DMCA, traffic exhausted, bad token) fail immediately so the
+        caller can try a different torrent instead of hammering the API.
         """
-        try:
-            resp = self.session.post(
-                f"{self.API_BASE}/unrestrict/link",
-                data={"link": link},
-                timeout=15,
-            )
-            resp.raise_for_status()
-            return resp.json()
-        except requests.RequestException as e:
-            print(f"  ✗ Error unrestricting link: {e}")
-            return None
+        reason = "unknown error"
+        for attempt in range(1, retries + 1):
+            try:
+                resp = self.session.post(
+                    f"{self.API_BASE}/unrestrict/link",
+                    data={"link": link},
+                    timeout=20,
+                )
+                if resp.status_code == 200:
+                    return resp.json(), ""
+
+                code, msg = None, ""
+                try:
+                    body = resp.json()
+                    code = body.get("error_code")
+                    msg = body.get("error", "")
+                except ValueError:
+                    pass
+                label = RD_ERRORS.get(code, msg or f"HTTP {resp.status_code}")
+                reason = f"RD {code}: {label}" if code is not None else label
+                retryable = (code in RD_RETRYABLE) or resp.status_code >= 500 \
+                    or resp.status_code == 429
+            except requests.RequestException as e:
+                reason = f"network error: {e}"
+                retryable = True
+
+            if not retryable or attempt == retries:
+                break
+            time.sleep(2 * (3 ** (attempt - 1)))  # 2s, 6s, 18s
+
+        print(f"  ✗ unrestrict failed: {reason}")
+        return None, reason
 
 
 # ─── Magnet File Saver (fallback) ──────────────────────────────────────────────
