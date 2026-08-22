@@ -250,10 +250,10 @@ class TorrentioClient:
                 streams.append(parsed)
         return streams
 
-    def select_best_stream(self, streams: list[TorrentStream],
-                           profile: Optional["QualityProfile"] = None,
-                           ) -> Optional[TorrentStream]:
-        """Select the best stream.
+    def rank_streams(self, streams: list[TorrentStream],
+                     profile: Optional["QualityProfile"] = None,
+                     ) -> list[TorrentStream]:
+        """Rank streams best-first.
 
         Cached ([RD+]) streams are strongly preferred: any cached stream that
         passes the profile's hard exclusions beats every uncached one. Among
@@ -261,9 +261,12 @@ class TorrentioClient:
         simple quality+seeders fallback) decides. This gives "prefer cached,
         fall back to best" — reliable instant downloads when RD has the content,
         and the best available torrent otherwise.
+
+        Returning the full ranking (not just the winner) lets the caller retry
+        with the next candidate when a torrent turns out to be undeliverable.
         """
         if not streams:
-            return None
+            return []
 
         if profile is not None:
             scored = []
@@ -271,11 +274,9 @@ class TorrentioClient:
                 sc = profile.score_stream(s.title, s.quality, s.seeders, s.size)
                 if sc >= 0:  # -1 means hard-excluded
                     scored.append((s.cached, sc, s))
-            if not scored:
-                return None
             # Sort by (cached first, then score) — cached always wins.
             scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
-            return scored[0][2]
+            return [t[2] for t in scored]
 
         # Fallback: simple cached + quality + seeders
         def score(s: TorrentStream) -> tuple:
@@ -286,8 +287,14 @@ class TorrentioClient:
                     break
             return (s.cached, quality_score, s.seeders)
 
-        streams_sorted = sorted(streams, key=score, reverse=True)
-        return streams_sorted[0]
+        return sorted(streams, key=score, reverse=True)
+
+    def select_best_stream(self, streams: list[TorrentStream],
+                           profile: Optional["QualityProfile"] = None,
+                           ) -> Optional[TorrentStream]:
+        """Best single stream, or None if nothing passes the profile."""
+        ranked = self.rank_streams(streams, profile)
+        return ranked[0] if ranked else None
 
     def get_streams_batch(
         self, episodes: list[Episode], delay: float = 2.0

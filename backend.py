@@ -16,6 +16,8 @@ from cinemeta import search_all, get_series_metadata, get_movie_metadata, Episod
 from torrentio import TorrentioClient, TorrentStream
 from clients import RealDebridClient, Aria2Client, AddResult
 from profiles import QualityProfile
+from naming import (ParsedFile, parse_media_filename, canonical_name,
+                    season_folder)
 
 # Setup logging
 logger = logging.getLogger("Zapflix")
@@ -23,11 +25,7 @@ logger.setLevel(logging.INFO)
 
 # Bump on every release — shown in the UI header, /api/status, and task logs
 # so a stale Docker image is immediately obvious.
-VERSION = "1.10.0"
-
-# Matches real episode files: "S01E02", "s1e2", or "01x08" style markers.
-# Anything without one (gag reels, VFX breakdowns...) is pack bonus content.
-_EPISODE_RE = re.compile(r"[Ss]\d{1,2}\s*[Ee]\d{1,3}|\b\d{1,2}x\d{2,3}\b")
+VERSION = "1.11.0"
 
 CONFIG_FILE = Path(__file__).parent / "config.json"
 
@@ -178,6 +176,14 @@ def _pack_seasons(stream: TorrentStream, season: int) -> set[int]:
         if 0 < a <= b <= 60:
             seasons.update(range(a, b + 1))
 
+    # Additive lists: "(Season 01 + Season 02 + OVA)" / "S01+S02"
+    if not re.search(r"s0*\d+\s*e\d+", name):
+        mentions = {int(m.group(1)) for m in
+                    re.finditer(r"(?:seasons?\s*|s)0*(\d{1,2})\b", name)}
+        mentions = {s for s in mentions if 0 < s <= 60}
+        if len(mentions) >= 2:
+            seasons |= mentions
+
     # Episode-range pack within this season: "S02E01-E12" (require the E on
     # both sides — "S04E02 - 117" must NOT match)
     if re.search(rf"s0*{season}\s*e\d+\s*[-–~]\s*e\d+", name):
@@ -224,13 +230,19 @@ def _filter_episodes(series: Series, selection) -> List[Episode]:
     return result
 
 
-def _target_subdir(base_dir: str, content_name: str, start_type: str, fname: str) -> str:
-    """Build the Jellyfin-friendly NAS subdirectory for a file."""
+def _target_subdir(base_dir: str, content_name: str, start_type: str, fname: str,
+                   parsed: Optional[ParsedFile] = None) -> str:
+    """Build the Jellyfin-friendly NAS subdirectory for a file.
+
+    The season comes from the filename parser, not a loose regex — the old
+    `[Ss](\\d{1,2})` matched the "S11" inside the TV station "BS11" and filed
+    an episode under "Season 11".
+    """
     if start_type == "movie":
         return os.path.join(base_dir, content_name)
-    s_match = re.search(r"[Ss](\d{1,2})", fname)
-    s_dir = f"Season {int(s_match.group(1)):02d}" if s_match else ""
-    return os.path.join(base_dir, content_name, s_dir)
+    if parsed is None:
+        parsed = parse_media_filename(fname)
+    return os.path.join(base_dir, content_name, season_folder(parsed))
 
 
 # ─── Failure auto-retry & delivery history ─────────────────────────────────────
@@ -490,8 +502,14 @@ def _write_deliveries(data: dict):
     tmp.replace(DELIVERIES_FILE)
 
 
-def record_torrent(tid: str, content_name: str, start_type: str, folder: Optional[str]):
-    """Journal an RD torrent we added, until all its files reach aria2."""
+def record_torrent(tid: str, content_name: str, start_type: str, folder: Optional[str],
+                   season_counts: Optional[dict] = None,
+                   pack_seasons: Optional[set] = None):
+    """Journal an RD torrent we added, until all its files reach aria2.
+
+    The naming context is stored alongside it so the reconciler can name files
+    correctly after a restart without re-fetching metadata.
+    """
     if not tid:
         return
     with _deliveries_lock:
@@ -499,6 +517,8 @@ def record_torrent(tid: str, content_name: str, start_type: str, folder: Optiona
         d["torrents"].setdefault(tid, {
             "content_name": content_name, "type": start_type,
             "folder": folder, "ts": int(time.time()), "done": False,
+            "season_counts": {str(k): v for k, v in (season_counts or {}).items()},
+            "pack_seasons": sorted(pack_seasons or []),
         })
         _write_deliveries(d)
 
@@ -509,6 +529,14 @@ def mark_torrent_done(tid: str):
         if tid in d["torrents"]:
             d["torrents"][tid]["done"] = True
             _write_deliveries(d)
+
+
+def _torrent_context(tid: str) -> tuple[dict, set]:
+    """Journaled naming context for a torrent: (season_counts, pack_seasons)."""
+    with _deliveries_lock:
+        t = _read_deliveries().get("torrents", {}).get(tid) or {}
+    return ({int(k): v for k, v in (t.get("season_counts") or {}).items()},
+            set(t.get("pack_seasons") or []))
 
 
 def link_sent(link: str) -> bool:
@@ -593,37 +621,38 @@ def retry_failure(fid: str, log_callback: Callable[[str], None] = lambda m: None
     if not rd_client or not aria2_client:
         return False, "Real-Debrid or aria2 unavailable — check config"
 
-    item = rd_client.unrestrict_link(entry["rd_link"])
+    item, error = rd_client.unrestrict_link(entry["rd_link"])
     if not item or not item.get("download"):
         record_failure(entry["content_name"], entry["type"], entry["rd_link"],
-                       entry.get("filename", "?"), "unrestrict failed (retried)",
-                       entry.get("folder"))
-        return False, "Unrestrict failed again — the RD torrent may be gone"
+                       entry.get("filename", "?"), error, entry.get("folder"))
+        return False, f"Still failing — {error}"
 
     fname = item.get("filename") or entry.get("filename") or "unknown"
 
-    if entry["type"] == "series" and not _EPISODE_RE.search(fname):
+    parsed = parse_media_filename(fname) if entry["type"] == "series" else None
+    if parsed is not None and not parsed.is_episode:
         remove_failure(fid)
-        return True, f"Skipped (bonus/extra content): {fname}"
+        return True, f"Skipped ({parsed.note}): {fname}"
 
     base_dir = _content_root(config, entry.get("folder"), entry["type"])
-    subdir = _target_subdir(base_dir, entry["content_name"], entry["type"], fname)
-    gid = aria2_client.add_download(item["download"], directory=subdir, filename=fname)
+    out_name = canonical_name(entry["content_name"], parsed, fname) if parsed else fname
+    subdir = _target_subdir(base_dir, entry["content_name"], entry["type"], fname, parsed)
+    gid = aria2_client.add_download(item["download"], directory=subdir, filename=out_name)
     if gid:
         remove_failure(fid)
-        record_sent(entry["rd_link"], gid, fname, entry["content_name"],
+        record_sent(entry["rd_link"], gid, out_name, entry["content_name"],
                     entry["type"], entry.get("folder"))
-        log_callback(f"🔁 Retry OK — sent to aria2: {fname}")
+        log_callback(f"🔁 Retry OK — sent to aria2: {out_name}")
         trigger_jellyfin_scan(config, log_callback)
-        return True, f"Sent to aria2: {fname}"
+        return True, f"Sent to aria2: {out_name}"
 
     record_failure(entry["content_name"], entry["type"], entry["rd_link"],
-                   fname, "aria2 add failed (retried)", entry.get("folder"))
+                   out_name, "aria2 add failed (retried)", entry.get("folder"))
     return False, "aria2 rejected the download again"
 
 
 def _deliver_cached(stream, aria2_client, base_dir, content_name, start_type,
-                    log_callback, folder=None) -> bool:
+                    log_callback, folder=None, episode: Optional[Episode] = None) -> bool:
     """Fast path for cached streams: resolve the direct link and push to aria2.
 
     Returns True on success. No RD polling, no unrestrict — instant & reliable.
@@ -633,12 +662,22 @@ def _deliver_cached(stream, aria2_client, base_dir, content_name, start_type,
     direct = resolve_direct_link(stream.resolve_url)
     if not direct:
         return False
+
     fname = stream.filename or content_name
-    subdir = _target_subdir(base_dir, content_name, start_type, fname)
-    gid = aria2_client.add_download(direct, directory=subdir, filename=fname)
+    out_name, subdir = fname, _target_subdir(base_dir, content_name, start_type, fname)
+
+    if start_type == "series":
+        # We asked Torrentio for one specific episode, so this file's identity
+        # is known — no parsing guesswork, whatever the release group called it.
+        parsed = (ParsedFile("episode", episode.season, episode.episode, how="requested")
+                  if episode is not None else parse_media_filename(fname))
+        out_name = canonical_name(content_name, parsed, fname)
+        subdir = _target_subdir(base_dir, content_name, start_type, fname, parsed)
+
+    gid = aria2_client.add_download(direct, directory=subdir, filename=out_name)
     if gid:
-        record_sent(stream.resolve_url, gid, fname, content_name, start_type, folder)
-        log_callback(f"🚀 Sent cached file to aria2: {fname}")
+        record_sent(stream.resolve_url, gid, out_name, content_name, start_type, folder)
+        log_callback(f"🚀 Sent cached file to aria2: {out_name}")
         return True
     return False
 
@@ -742,6 +781,10 @@ def process_download_task(
             update_task_name(task_id, series.name)
             log_callback(f"📺 Processing Series: {series.name} — {len(episodes)} episode(s) selected")
 
+            # Episode counts per season drive absolute-number parsing inside
+            # packs (anime releases number continuously across seasons).
+            season_counts = {n: len(v) for n, v in series.seasons.items()}
+
             covered_hashes: set[str] = set()
             covered_seasons: set[int] = set()
             sent_resolves: set[str] = set()
@@ -758,7 +801,8 @@ def process_download_task(
                     continue
 
                 streams = torrentio.get_streams(ep)
-                selected = torrentio.select_best_stream(streams, profile)
+                ranked = torrentio.rank_streams(streams, profile)
+                selected = ranked[0] if ranked else None
 
                 if i < len(episodes) - 1:
                     time.sleep(delay)  # rate-limit Torrentio
@@ -787,26 +831,44 @@ def process_download_task(
                     log_callback(f"📦 {ep.label}: {cache_tag}pack covers {label} "
                                  f"({selected.quality}, {selected.size}) — adding to RD")
                     rd_client.add_magnet(selected)
-                    record_torrent(rd_client.torrent_id(selected.info_hash), series.name, "series", folder)
+                    record_torrent(rd_client.torrent_id(selected.info_hash), series.name,
+                                   "series", folder, season_counts, pack_seasons)
                     covered_hashes.add(selected.info_hash)
                     covered_seasons |= pack_seasons
                     rd_queued += 1
                     continue
 
-                # Single-episode torrent, cached: instant direct link to aria2
+                # Single-episode torrent, cached: instant direct link to aria2.
+                # A resolve can fail on a stale cache entry, so try the next
+                # cached candidate before falling back to a slow RD download.
                 if aria2_client and selected.cached and selected.resolve_url:
-                    if selected.resolve_url in sent_resolves:
+                    handled, tried = False, 0
+                    for cand in ranked:
+                        if tried >= 3:
+                            break
+                        if not cand.cached or not cand.resolve_url or _pack_seasons(cand, ep.season):
+                            continue
+                        if cand.resolve_url in sent_resolves:
+                            handled = True
+                            break
+                        tried += 1
+                        if _deliver_cached(cand, aria2_client, base_dir, series.name,
+                                           "series", log_callback, folder, ep):
+                            alt = " (alternative source)" if tried > 1 else ""
+                            log_callback(f"⬇️ {ep.label}: ⚡RD+ {cand.quality} ({cand.size}){alt}")
+                            sent_resolves.add(cand.resolve_url)
+                            cached_sent += 1
+                            handled = True
+                            break
+                    if handled:
                         continue
-                    if _deliver_cached(selected, aria2_client, base_dir, series.name, "series", log_callback, folder):
-                        log_callback(f"⬇️ {ep.label}: {cache_tag}{selected.quality} ({selected.size})")
-                        sent_resolves.add(selected.resolve_url)
-                        cached_sent += 1
-                        continue
+                    log_callback(f"↳ {ep.label}: cached link(s) would not resolve — falling back to RD")
 
                 # Uncached (or resolve failed): add magnet for RD to download
                 log_callback(f"⬇️ {ep.label}: adding {cache_tag}{selected.quality} ({selected.size}) to RD")
                 rd_client.add_magnet(selected)
-                record_torrent(rd_client.torrent_id(selected.info_hash), series.name, "series", folder)
+                record_torrent(rd_client.torrent_id(selected.info_hash), series.name,
+                               "series", folder, season_counts, pack_seasons)
                 covered_hashes.add(selected.info_hash)
                 rd_queued += 1
 
@@ -819,7 +881,21 @@ def process_download_task(
             # Packs and uncached torrents are delivered by the sync stage
             if aria2_client and rd_queued:
                 log_callback("⏳ Syncing RD torrents to aria2 (instant for cached packs)...")
-                sync_rd_to_aria2(rd_client, aria2_client, series.name, "series", config, log_callback, base_dir, folder, cancel)
+                sync_rd_to_aria2(rd_client, aria2_client, series.name, "series", config,
+                                 log_callback, base_dir, folder, cancel, season_counts)
+
+            # ── Gap check ──
+            # A pack can be added successfully and still not deliver an episode
+            # (dead cache entry, a season the pack turned out not to contain).
+            # Re-check what actually reached aria2 and rescue the gaps from a
+            # different source rather than reporting success.
+            if aria2_client and episodes:
+                _check_cancel(cancel)
+                rescued = _rescue_missing_episodes(
+                    series, episodes, no_stream_keys, covered_hashes, torrentio,
+                    profile, rd_client, aria2_client, base_dir, folder,
+                    season_counts, delay, log_callback, cancel)
+                cached_sent += rescued
 
             if cached_sent or rd_queued:
                 trigger_jellyfin_scan(config, log_callback)
@@ -842,8 +918,70 @@ def process_download_task(
     return None
 
 
+MAX_RESCUE_EPISODES = 30
+
+
+def _rescue_missing_episodes(series, episodes, no_stream_keys, tried_hashes,
+                             torrentio, profile, rd_client, aria2_client,
+                             base_dir, folder, season_counts, delay,
+                             log_callback, cancel=None) -> int:
+    """Re-fetch episodes that never actually reached aria2.
+
+    Adding a torrent successfully is not the same as delivering an episode: a
+    pack can fail to unrestrict, or turn out not to contain the season its
+    name advertised. This compares the selection against what the delivery
+    journal says was really sent and retries the gaps from a different source.
+    """
+    delivered = set(build_library_index()["series"].get(series.name.lower().strip(), []))
+
+    # Torrents still working on RD will be finished by the reconciler — don't
+    # duplicate their episodes by fetching alternatives now.
+    with _deliveries_lock:
+        torrents = _read_deliveries().get("torrents", {})
+    if any(not t.get("done") and t.get("content_name") == series.name
+           for t in torrents.values()):
+        return 0
+
+    missing = [ep for ep in episodes
+               if f"{ep.season}:{ep.episode}" not in delivered
+               and f"{ep.season}:{ep.episode}" not in no_stream_keys]
+    if not missing:
+        return 0
+
+    capped = missing[:MAX_RESCUE_EPISODES]
+    log_callback(f"🔎 {len(missing)} selected episode(s) never reached aria2 — "
+                 f"retrying {len(capped)} from other sources...")
+    if len(capped) < len(missing):
+        log_callback(f"⚠️ Only the first {MAX_RESCUE_EPISODES} are retried this run; "
+                     "run the download again to continue.")
+
+    rescued = 0
+    for i, ep in enumerate(capped):
+        _check_cancel(cancel)
+        ranked = torrentio.rank_streams(torrentio.get_streams(ep), profile)
+        if i < len(capped) - 1:
+            time.sleep(delay)
+        for cand in ranked[:6]:
+            # Skip the torrents that already let us down, and packs (a pack
+            # would just repeat the same bulk failure).
+            if cand.info_hash in tried_hashes or _pack_seasons(cand, ep.season):
+                continue
+            if not (cand.cached and cand.resolve_url):
+                continue
+            if _deliver_cached(cand, aria2_client, base_dir, series.name,
+                               "series", log_callback, folder, ep):
+                log_callback(f"🩹 Recovered {ep.label}: ⚡RD+ {cand.quality} ({cand.size})")
+                tried_hashes.add(cand.info_hash)
+                rescued += 1
+                break
+        else:
+            log_callback(f"⚠️ {ep.label}: no working alternative source found")
+    return rescued
+
+
 def sync_rd_to_aria2(rd_client, aria2_client, content_name, start_type, config,
-                     log_callback, base_dir=None, folder=None, cancel=None):
+                     log_callback, base_dir=None, folder=None, cancel=None,
+                     season_counts=None, pack_seasons=None):
     """Poll RD to completion, then push each file to aria2 exactly once.
 
     Used for uncached torrents that RD must download first. Sent links are
@@ -894,9 +1032,13 @@ def sync_rd_to_aria2(rd_client, aria2_client, content_name, start_type, config,
             if not info:
                 continue
 
+            # Each torrent carries its own naming context (a pack covering
+            # S01+S02 numbers files differently from a single-season pack).
+            t_counts, t_packs = _torrent_context(tid)
             sent, failed, skipped = _deliver_rd_links(
                 info, content_name, start_type, base_dir, folder,
-                rd_client, aria2_client, log_callback, cancel)
+                rd_client, aria2_client, log_callback, cancel,
+                t_counts or season_counts, t_packs or pack_seasons)
             total_sent += sent
             total_failed += failed
             skipped_extras += skipped
@@ -920,54 +1062,102 @@ def sync_rd_to_aria2(rd_client, aria2_client, content_name, start_type, config,
 
 
 def _deliver_rd_links(info, content_name, start_type, base_dir, folder,
-                      rd_client, aria2_client, log_callback, cancel=None) -> tuple[int, int, int]:
+                      rd_client, aria2_client, log_callback, cancel=None,
+                      season_counts=None, pack_seasons=None) -> tuple[int, int, int]:
     """Send every not-yet-sent file of a downloaded RD torrent to aria2.
+
+    Files are classified from their path *before* unrestricting, so bonus
+    material never costs an API call — which also keeps us well clear of RD's
+    rate limits on big packs. Episodes are renamed canonically so releases
+    from different groups land consistently.
 
     Consults/updates the persistent delivery journal, so it is safe to call
     again after a crash or reboot — already-sent links are skipped.
-    Returns (sent, failed, skipped_extras).
+    Returns (sent, failed, skipped).
     """
     sent = failed = skipped = 0
-    for link in info.get("links", []):
+    unrecognised: list[str] = []
+    # Guards against a pack that ships two copies of an episode (e.g. 1080p
+    # and 720p): both would rename to the same target and silently overwrite.
+    claimed: set[str] = set()
+
+    links = info.get("links", [])
+    selected = [f for f in info.get("files", []) if f.get("selected")]
+    # RD returns exactly one link per selected file, in file order. Pairing
+    # them gives us the full in-torrent path (directory context included)
+    # before we spend an unrestrict call. If the counts ever disagree, fall
+    # back to parsing the unrestricted filename rather than risk mis-pairing.
+    paired = selected if len(selected) == len(links) else None
+    if paired is None and links:
+        log_callback(f"⚠️ RD returned {len(links)} link(s) for {len(selected)} selected "
+                     "file(s) — classifying after unrestrict instead")
+
+    for idx, link in enumerate(links):
         _check_cancel(cancel)
         if link_sent(link):
             continue
 
-        item = rd_client.unrestrict_link(link)
+        path = paired[idx].get("path", "") if paired else ""
+        parsed = None
+        if start_type == "series" and path:
+            parsed = parse_media_filename(path, season_counts, pack_seasons)
+            if not parsed.is_episode:
+                skipped += 1
+                if parsed.kind == "extra":
+                    record_sent(link, "", os.path.basename(path), content_name,
+                                start_type, folder)  # settled: never reconsider
+                else:
+                    unrecognised.append(os.path.basename(path))
+                continue
+
+        item, error = rd_client.unrestrict_link(link)
         if not item or not item.get("download"):
-            time.sleep(2)  # transient / expired-link retry
-            item = rd_client.unrestrict_link(link)
-        if not item or not item.get("download"):
-            torrent_name = info.get("filename", "?")
-            log_callback(f"❌ Failed to unrestrict a link from '{torrent_name}' — saved for retry")
-            record_failure(content_name, start_type, link,
-                           f"(file from {torrent_name})", "unrestrict failed", folder)
+            label = os.path.basename(path) or f"a file from '{info.get('filename', '?')}'"
+            log_callback(f"❌ Could not unrestrict {label} — {error}")
+            record_failure(content_name, start_type, link, label, error, folder)
             failed += 1
             continue
 
         fname = item.get("filename", "unknown")
+        out_name, subdir = fname, _target_subdir(base_dir, content_name, start_type, fname)
 
-        # Series: only deliver real episodes. Season packs bundle bonus
-        # content (gag reels, VFX breakdowns...) whose names carry no
-        # episode marker — they'd clutter the library and same-named
-        # files from different seasons would overwrite each other.
-        if start_type == "series" and not _EPISODE_RE.search(fname):
-            record_sent(link, "", fname, content_name, start_type, folder)  # never resend
-            skipped += 1
-            continue
+        if start_type == "series":
+            if parsed is None:  # no path context — classify the real filename
+                parsed = parse_media_filename(fname, season_counts, pack_seasons)
+                if not parsed.is_episode:
+                    skipped += 1
+                    if parsed.kind == "extra":
+                        record_sent(link, "", fname, content_name, start_type, folder)
+                    else:
+                        unrecognised.append(fname)
+                    continue
+            out_name = canonical_name(content_name, parsed, fname)
+            subdir = _target_subdir(base_dir, content_name, start_type, fname, parsed)
 
-        subdir = _target_subdir(base_dir, content_name, start_type, fname)
-        gid = aria2_client.add_download(item["download"], directory=subdir, filename=fname)
+            target = os.path.join(subdir, out_name)
+            if target in claimed:
+                log_callback(f"⏭️ Skipping duplicate of {out_name} ({fname})")
+                record_sent(link, "", fname, content_name, start_type, folder)
+                skipped += 1
+                continue
+            claimed.add(target)
+
+        gid = aria2_client.add_download(item["download"], directory=subdir, filename=out_name)
         if gid:
-            record_sent(link, gid, fname, content_name, start_type, folder)
+            record_sent(link, gid, out_name, content_name, start_type, folder)
             sent += 1
-            log_callback(f"🚀 Sent to aria2: {fname}")
+            log_callback(f"🚀 Sent to aria2: {out_name}")
         else:
             failed += 1
-            log_callback(f"❌ aria2 failed for: {fname} — saved for retry")
-            record_failure(content_name, start_type, link, fname, "aria2 add failed", folder)
+            log_callback(f"❌ aria2 rejected {out_name} — saved for retry")
+            record_failure(content_name, start_type, link, out_name, "aria2 add failed", folder)
 
         time.sleep(0.5)
+
+    if unrecognised:
+        preview = ", ".join(unrecognised[:3]) + (" …" if len(unrecognised) > 3 else "")
+        log_callback(f"❓ {len(unrecognised)} file(s) had no recognisable episode number "
+                     f"and were left alone: {preview}")
     return sent, failed, skipped
 
 
@@ -1006,9 +1196,11 @@ def resume_pending_deliveries(log_callback: Callable[[str], None] = lambda m: No
             continue  # RD still working — try again next pass
 
         base_dir = _content_root(config, t.get("folder"), t.get("type", "series"))
+        counts = {int(k): v for k, v in (t.get("season_counts") or {}).items()}
         sent, failed_n, _ = _deliver_rd_links(
             info, t.get("content_name", "?"), t.get("type", "series"),
-            base_dir, t.get("folder"), rd_client, aria2_client, log_callback)
+            base_dir, t.get("folder"), rd_client, aria2_client, log_callback,
+            None, counts, set(t.get("pack_seasons") or []))
         if not failed_n:
             mark_torrent_done(tid)
         if sent:

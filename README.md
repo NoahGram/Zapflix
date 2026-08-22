@@ -122,6 +122,12 @@ Zapflix/
 - **Long series**: for a whole season, a detected season pack covers the season
   in one torrent, and Torrentio queries are rate-limited to avoid throttling.
 - **aria2**: files are foldered as `<Title>/Season NN/` for Jellyfin.
+- **Naming**: episodes are recognised whether the release uses `S01E05`,
+  `1x05`, or a bare anime-style absolute number (`[Group] Show - 25.mkv` →
+  S02E01 via the per-season episode counts), then renamed canonically to
+  `<Title> - S01E05.ext` so different release groups land consistently.
+  Specials/OVAs keep their original names in `Season 00`. See
+  [naming.py](naming.py) and [test_naming.py](test_naming.py).
 - **Monitoring**: hit 🔔 Monitor on a series and Zapflix auto-grabs new
   episodes as they air (checked every `monitoring.check_interval_hours`,
   default 6h; ledger in `data/monitored.json`).
