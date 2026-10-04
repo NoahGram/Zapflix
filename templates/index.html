@@ -6,457 +6,797 @@
     <title>Zapflix NAS</title>
     <script src="//unpkg.com/alpinejs" defer></script>
     <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/vanta@latest/dist/vanta.net.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/vanta@latest/dist/vanta.clouds.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/vanta@latest/dist/vanta.cells.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <style>
-        ::-webkit-scrollbar { width: 8px; height: 8px; }
-        ::-webkit-scrollbar-track { background: #1f2937; }
-        ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
-        ::-webkit-scrollbar-thumb:hover { background: #6b7280; }
-        .glass-panel {
-            background: rgba(31, 41, 55, 0.72);
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.08);
+        /* ─────────────────────────────────────────────────────────────
+           Zapflix "floating glass window" — see design_handoff README.
+           Layout/styling only: every Alpine binding is unchanged.
+           ───────────────────────────────────────────────────────────── */
+        :root {
+            --text: #f4f4f5;
+            --text-2: rgba(255,255,255,.65);
+            --text-3: rgba(255,255,255,.46);
+            --panel: rgba(255,255,255,.05);
+            --panel-line: rgba(255,255,255,.08);
+            --pill: rgba(255,255,255,.08);
+            --blue: #2563eb; --blue-bar: #3b82f6; --blue-text: #60a5fa;
+            --green: #16a34a; --green-ok: #22c55e; --green-text: #4ade80;
+            --red: #b91c1c; --red-bar: #ef4444; --red-text: #f87171;
+            --yellow: #facc15;
         }
-        .poster-card { transition: transform .15s ease, box-shadow .15s ease; }
-        .poster-card:hover { transform: translateY(-4px); box-shadow: 0 12px 30px rgba(0,0,0,.5); }
+        * { box-sizing: border-box; }
+        html, body { height: 100%; }
+        body {
+            margin: 0; background: #000; color: var(--text);
+            font-family: 'Plus Jakarta Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
+            font-size: 15px; overflow: hidden;
+        }
         [x-cloak] { display: none !important; }
+
+        /* ── Page background: layered dark pattern (replaces Vanta.js) ── */
+        .bg-root { position: fixed; inset: 0; overflow: hidden; z-index: 0; }
+        .bg-base {
+            position: absolute; inset: 0;
+            background: radial-gradient(100% 100% at 0% 0%, rgb(46,46,46) 0%, rgb(0,0,0) 100%);
+            -webkit-mask: radial-gradient(125% 100% at 0% 0%, rgb(0,0,0) 0%, rgba(0,0,0,.224) 88.2883%, rgba(0,0,0,0) 100%);
+            mask: radial-gradient(125% 100% at 0% 0%, rgb(0,0,0) 0%, rgba(0,0,0,.224) 88.2883%, rgba(0,0,0,0) 100%);
+        }
+        .streak {
+            position: absolute; inset: 0; opacity: .2; transform: skewX(45deg);
+            background: linear-gradient(rgb(0,207,255) 0%, rgba(0,207,255,0) 100%);
+        }
+        .s1 { -webkit-mask: linear-gradient(90deg,rgba(0,0,0,0) 0%,rgb(0,0,0) 20%,rgba(0,0,0,0) 36%,rgb(0,0,0) 55%,rgba(0,0,0,.13) 67%,rgb(0,0,0) 78%,rgba(0,0,0,0) 97%);
+                  mask: linear-gradient(90deg,rgba(0,0,0,0) 0%,rgb(0,0,0) 20%,rgba(0,0,0,0) 36%,rgb(0,0,0) 55%,rgba(0,0,0,.13) 67%,rgb(0,0,0) 78%,rgba(0,0,0,0) 97%); }
+        .s2 { -webkit-mask: linear-gradient(90deg,rgba(0,0,0,0) 11%,rgb(0,0,0) 25%,rgba(0,0,0,.55) 41%,rgba(0,0,0,.13) 67%,rgb(0,0,0) 78%,rgba(0,0,0,0) 97%);
+                  mask: linear-gradient(90deg,rgba(0,0,0,0) 11%,rgb(0,0,0) 25%,rgba(0,0,0,.55) 41%,rgba(0,0,0,.13) 67%,rgb(0,0,0) 78%,rgba(0,0,0,0) 97%); }
+        .s3 { -webkit-mask: linear-gradient(90deg,rgba(0,0,0,0) 9%,rgb(0,0,0) 20%,rgba(0,0,0,.55) 28%,rgba(0,0,0,.424) 40%,rgb(0,0,0) 48%,rgba(0,0,0,.267) 54%,rgba(0,0,0,.13) 78%,rgb(0,0,0) 88%,rgba(0,0,0,0) 97%);
+                  mask: linear-gradient(90deg,rgba(0,0,0,0) 9%,rgb(0,0,0) 20%,rgba(0,0,0,.55) 28%,rgba(0,0,0,.424) 40%,rgb(0,0,0) 48%,rgba(0,0,0,.267) 54%,rgba(0,0,0,.13) 78%,rgb(0,0,0) 88%,rgba(0,0,0,0) 97%); }
+        .s4 { -webkit-mask: linear-gradient(90deg,rgba(0,0,0,0) 0%,rgb(0,0,0) 17%,rgba(0,0,0,.55) 26%,rgb(0,0,0) 35%,rgba(0,0,0,0) 47%,rgba(0,0,0,.13) 69%,rgb(0,0,0) 79%,rgba(0,0,0,0) 97%);
+                  mask: linear-gradient(90deg,rgba(0,0,0,0) 0%,rgb(0,0,0) 17%,rgba(0,0,0,.55) 26%,rgb(0,0,0) 35%,rgba(0,0,0,0) 47%,rgba(0,0,0,.13) 69%,rgb(0,0,0) 79%,rgba(0,0,0,0) 97%); }
+        .s5 { -webkit-mask: linear-gradient(90deg,rgba(0,0,0,0) 0%,rgb(0,0,0) 20%,rgba(0,0,0,.55) 27%,rgb(0,0,0) 42%,rgba(0,0,0,0) 48%,rgba(0,0,0,.13) 67%,rgb(0,0,0) 74%,rgb(0,0,0) 82%,rgba(0,0,0,.47) 88%,rgba(0,0,0,0) 97%);
+                  mask: linear-gradient(90deg,rgba(0,0,0,0) 0%,rgb(0,0,0) 20%,rgba(0,0,0,.55) 27%,rgb(0,0,0) 42%,rgba(0,0,0,0) 48%,rgba(0,0,0,.13) 67%,rgb(0,0,0) 74%,rgb(0,0,0) 82%,rgba(0,0,0,.47) 88%,rgba(0,0,0,0) 97%); }
+        /* Grain, generated locally so the NAS needs no CDN */
+        .bg-grain {
+            position: absolute; inset: 0; opacity: .05; background-size: 149.76px;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+        }
+        .bg-dots {
+            position: absolute; inset: 0; opacity: .2; background-size: 20px 20px;
+            background-image: radial-gradient(circle at 1px 1px, rgba(255,255,255,.5) 1px, transparent 0);
+        }
+
+        /* ── App window ── */
+        .app-window {
+            position: fixed; top: 44px; bottom: 44px; left: 56px; right: 56px; z-index: 10;
+            border-radius: 36px; background: rgba(32,32,36,.55);
+            backdrop-filter: blur(40px) saturate(140%); -webkit-backdrop-filter: blur(40px) saturate(140%);
+            border: 1px solid rgba(255,255,255,.12); box-shadow: 0 40px 120px rgba(0,0,0,.5);
+            padding: 24px; display: flex; flex-direction: column; gap: 22px; overflow: hidden;
+        }
+        .grid-3 { display: grid; grid-template-columns: 520px minmax(0,1fr) 560px; gap: 24px; }
+
+        /* ── Top bar ── */
+        .topbar { height: 56px; flex: none; align-items: center; }
+        .tb-left { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+        .logo {
+            font-size: 22px; font-weight: 800; line-height: 1.1;
+            background: linear-gradient(90deg,#60a5fa,#a855f7);
+            -webkit-background-clip: text; background-clip: text; color: transparent;
+        }
+        .logo-sub { font-size: 11px; color: rgba(255,255,255,.55); margin-top: 2px; }
+        .tabs { display: flex; gap: 4px; }
+        .tab {
+            font-size: 14px; padding: 9px 16px; border-radius: 20px; border: 0; cursor: pointer;
+            background: transparent; color: rgba(255,255,255,.65); transition: background .15s, color .15s;
+        }
+        .tab:hover { background: rgba(255,255,255,.07); color: var(--text); }
+        .tab.active { background: rgba(255,255,255,.14); color: var(--text); font-weight: 600; }
+        .searchbar {
+            display: flex; align-items: center; gap: 10px; margin: 0 auto; width: 100%; max-width: 820px;
+            height: 52px; border-radius: 26px; background: rgba(255,255,255,.09);
+            border: 1px solid rgba(255,255,255,.14); box-shadow: 0 8px 30px rgba(0,0,0,.25);
+            padding: 0 8px 0 22px;
+        }
+        .search-glyph { font-size: 19px; color: rgba(255,255,255,.6); }
+        .searchbar input {
+            flex: 1; background: transparent; border: 0; outline: 0; color: var(--text); font: inherit;
+        }
+        .searchbar input::placeholder { color: rgba(255,255,255,.55); }
+        .search-btn {
+            height: 38px; padding: 0 20px; border-radius: 19px; border: 0; cursor: pointer;
+            background: var(--blue); color: #fff; font-size: 14px; font-weight: 600;
+        }
+        .search-btn:hover { background: #1d4ed8; }
+        .search-btn:disabled { opacity: .6; cursor: default; }
+        .tb-right { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+        .chip {
+            display: flex; align-items: center; gap: 7px; font-size: 12.5px; padding: 8px 12px;
+            border-radius: 20px; background: rgba(255,255,255,.07); color: rgba(255,255,255,.8);
+            white-space: nowrap;
+        }
+        .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green-ok); flex: none; }
+        .dot.off { background: #6b7280; }
+        .gear {
+            width: 44px; height: 44px; border-radius: 50%; border: 0; cursor: pointer; flex: none;
+            background: rgba(255,255,255,.08); font-size: 18px; transition: transform .3s, background .15s;
+        }
+        .gear:hover { background: rgba(255,255,255,.14); transform: rotate(45deg); }
+
+        /* ── Columns & panels ── */
+        .body-grid { flex: 1; min-height: 0; }
+        .col { display: flex; flex-direction: column; gap: 20px; min-height: 0; }
+        .panel {
+            border-radius: 26px; background: var(--panel); border: 1px solid var(--panel-line);
+            padding: 20px; display: flex; flex-direction: column; gap: 14px; min-height: 0;
+        }
+        .panel.grow { flex: 1; }
+        .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+        .panel-title { font-size: 16px; font-weight: 600; }
+        .panel-title .count { font-weight: 500; color: rgba(255,255,255,.5); }
+        .panel.tasks { background: rgba(59,130,246,.1); border-color: rgba(59,130,246,.3); }
+        .panel.tasks .panel-title { color: #bfdbfe; }
+        .panel.failed { background: rgba(239,68,68,.09); border-color: rgba(239,68,68,.3); }
+        .panel.failed .panel-title { color: #fecaca; }
+        .panel.logs { background: rgba(0,0,0,.25); }
+        .pill {
+            font-size: 12.5px; padding: 6px 12px; border-radius: 14px; border: 0; cursor: pointer;
+            background: var(--pill); color: var(--text); transition: background .15s;
+        }
+        .pill:hover { background: rgba(255,255,255,.12); }
+        .scroll { overflow-y: auto; min-height: 0; }
+        .scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+        .scroll::-webkit-scrollbar-track { background: transparent; }
+        .scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border-radius: 4px; }
+        .scroll::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.2); }
+
+        /* ── Rows ── */
+        .row { display: flex; align-items: center; gap: 14px; }
+        .thumb { border-radius: 8px; object-fit: cover; background: #27272a; flex: none; }
+        .ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .round-x {
+            width: 34px; height: 34px; border-radius: 50%; border: 0; cursor: pointer; flex: none;
+            background: rgba(255,255,255,.08); color: var(--text); transition: background .15s;
+        }
+        .round-x:hover { background: rgba(185,28,28,.8); }
+        .bar { height: 4px; border-radius: 2px; background: rgba(255,255,255,.1); overflow: hidden; margin-top: 6px; }
+        .bar > div { height: 100%; border-radius: 2px; transition: width .5s ease; }
+
+        /* ── Hero ── */
+        .hero { position: relative; height: 640px; border-radius: 28px; overflow: hidden; flex: none; }
+        .hero-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+        .hero-overlay {
+            position: absolute; inset: 0;
+            background: linear-gradient(90deg, rgba(10,10,12,.92) 0%, rgba(10,10,12,.55) 45%, rgba(10,10,12,.1) 75%);
+        }
+        .hero-poster {
+            position: absolute; right: 120px; top: 60px; height: 520px; aspect-ratio: 2/3;
+            border-radius: 14px; object-fit: cover; box-shadow: 0 30px 80px rgba(0,0,0,.6); cursor: pointer;
+            background: #27272a;
+        }
+        .hero-text { position: absolute; left: 48px; bottom: 48px; width: 900px; max-width: calc(100% - 96px); display: flex; flex-direction: column; gap: 16px; }
+        .hero-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+        .hchip { font-size: 13px; padding: 6px 12px; border-radius: 14px; background: rgba(255,255,255,.12); }
+        .hchip.movie { background: rgba(22,163,74,.85); font-weight: 700; }
+        .hchip.series { background: rgba(147,51,234,.85); font-weight: 700; }
+        .hero-title { font-size: 60px; font-weight: 700; line-height: 1.05; letter-spacing: -.015em; cursor: pointer; margin: 0; }
+        .hero-meta { font-size: 18px; color: rgba(255,255,255,.75); }
+        .hero-actions { display: flex; gap: 12px; align-items: center; }
+        .btn-primary {
+            height: 56px; padding: 0 28px; border-radius: 28px; border: 0; cursor: pointer;
+            background: var(--green); color: #fff; font-size: 17px; font-weight: 700;
+        }
+        .btn-primary:hover { background: #15803d; }
+        .btn-primary:disabled { opacity: .45; cursor: default; }
+        .folder-select {
+            height: 56px; padding: 0 18px; border-radius: 28px; cursor: pointer; color: var(--text);
+            background: transparent; border: 1.5px solid rgba(255,255,255,.4); font: inherit; font-size: 15px;
+        }
+        .folder-select option { background: #18181b; }
+        .hero-nav { position: absolute; right: 40px; bottom: 40px; display: flex; gap: 10px; }
+        .nav-circle {
+            width: 48px; height: 48px; border-radius: 50%; border: 0; cursor: pointer; font-size: 18px;
+            background: rgba(255,255,255,.1); color: var(--text);
+        }
+        .nav-circle:hover { background: rgba(255,255,255,.22); }
+
+        /* ── Poster cards ── */
+        .row-head { display: flex; align-items: center; justify-content: space-between; }
+        .row-title { font-size: 22px; font-weight: 600; }
+        .seg { display: flex; gap: 2px; padding: 3px; border-radius: 16px; background: rgba(255,255,255,.07); }
+        .seg button {
+            font-size: 13px; padding: 6px 14px; border-radius: 13px; border: 0; cursor: pointer;
+            background: transparent; color: rgba(255,255,255,.7);
+        }
+        .seg button.on { background: rgba(255,255,255,.14); color: var(--text); font-weight: 600; }
+        .cards { display: grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap: 18px; }
+        .cards.wrap { grid-template-columns: repeat(auto-fill, minmax(180px,1fr)); }
+        .card {
+            position: relative; aspect-ratio: 2/3; border-radius: 20px; overflow: hidden; cursor: pointer;
+            background: #27272a; transition: transform .15s ease, box-shadow .15s ease;
+        }
+        .card:hover { transform: translateY(-4px); box-shadow: 0 12px 30px rgba(0,0,0,.5); }
+        .card img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+        .card-overlay {
+            position: absolute; inset: 0;
+            background: linear-gradient(0deg, rgba(10,10,12,.95) 0%, rgba(10,10,12,.6) 26%, transparent 50%);
+        }
+        .card-type {
+            position: absolute; top: 10px; left: 10px; font-size: 11px; font-weight: 700;
+            letter-spacing: .05em; padding: 4px 9px; border-radius: 12px;
+        }
+        .card-type.movie { background: rgba(22,163,74,.9); }
+        .card-type.series { background: rgba(147,51,234,.9); }
+        .card-check {
+            position: absolute; top: 10px; right: 10px; width: 40px; height: 40px; border-radius: 50%;
+            background: var(--green-ok); color: #052e16; font-weight: 800; display: flex;
+            align-items: center; justify-content: center; font-size: 18px;
+        }
+        .card-foot { position: absolute; left: 16px; right: 16px; bottom: 16px; }
+        .card-name { font-size: 16px; font-weight: 600; }
+        .card-year { font-size: 13px; color: rgba(255,255,255,.6); }
+
+        /* ── Detail ── */
+        .detail-head { position: relative; height: 500px; border-radius: 28px; overflow: hidden; flex: none; }
+        .detail-overlay {
+            position: absolute; inset: 0;
+            background: linear-gradient(90deg, rgba(10,10,12,.94) 0%, rgba(10,10,12,.6) 50%, rgba(10,10,12,.15) 80%);
+        }
+        .back-pill {
+            position: absolute; top: 24px; left: 24px; font-size: 14px; padding: 8px 16px; border-radius: 18px;
+            border: 0; cursor: pointer; background: rgba(255,255,255,.12); color: var(--text); z-index: 2;
+        }
+        .back-pill:hover { background: rgba(255,255,255,.2); }
+        .detail-bottom { position: absolute; left: 40px; right: 40px; bottom: 40px; display: flex; gap: 36px; align-items: flex-end; }
+        .detail-poster { width: 240px; aspect-ratio: 2/3; border-radius: 14px; object-fit: cover; flex: none; background: #27272a; }
+        .detail-title { font-size: 56px; font-weight: 700; line-height: 1.05; margin: 0; }
+        .detail-meta { font-size: 17px; color: rgba(255,255,255,.75); display: flex; gap: 14px; align-items: center; }
+        .detail-plot { font-size: 16px; line-height: 1.55; color: rgba(255,255,255,.68); max-width: 720px;
+                       display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+        .action-stack { width: 300px; display: flex; flex-direction: column; gap: 10px; flex: none; }
+        .btn-dl { height: 54px; border-radius: 27px; border: 0; cursor: pointer; background: var(--green); color: #fff; font-size: 16px; font-weight: 700; }
+        .btn-dl:hover { background: #15803d; }
+        .btn-dl:disabled { opacity: .45; cursor: default; }
+        .btn-mon { height: 50px; border-radius: 25px; border: 0; cursor: pointer; background: rgba(255,255,255,.08); color: var(--text); font-size: 15px; font-weight: 600; }
+        .btn-mon:hover { background: rgba(255,255,255,.14); }
+        .btn-mon.on { background: rgba(202,138,4,.9); }
+        .folder-select.sm { height: 50px; border-radius: 25px; border-color: rgba(255,255,255,.35); }
+
+        /* ── Episodes ── */
+        .ep-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+        .ep-pill { font-size: 13.5px; padding: 8px 16px; border-radius: 18px; border: 0; cursor: pointer; background: rgba(255,255,255,.08); color: var(--text); }
+        .ep-pill:hover { background: rgba(255,255,255,.14); }
+        .ep-pill.on { background: rgba(255,255,255,.18); font-weight: 600; }
+        .season {
+            border-radius: 18px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.06);
+            margin-bottom: 10px; overflow: hidden;
+        }
+        .season-head { display: flex; align-items: center; justify-content: space-between; padding: 11px 18px; cursor: pointer; gap: 12px; }
+        .season-head:hover { background: rgba(255,255,255,.03); }
+        .cbox {
+            width: 18px; height: 18px; border-radius: 5px; border: 1.5px solid rgba(255,255,255,.35);
+            flex: none; display: flex; align-items: center; justify-content: center; font-size: 12px; cursor: pointer;
+            background: transparent; color: transparent; padding: 0;
+        }
+        .cbox.on { background: var(--green-ok); border-color: var(--green-ok); color: #052e16; font-weight: 800; }
+        .eps { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 2px 8px; padding: 0 12px 12px; }
+        .ep {
+            display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 10px;
+            font-size: 13px; cursor: pointer; min-width: 0;
+        }
+        .ep:hover { background: rgba(255,255,255,.05); }
+        .ep.sel { background: rgba(34,197,94,.08); }
+        .ep-num { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12px; color: rgba(255,255,255,.45); flex: none; }
+
+        /* ── Logs / history ── */
+        .logline { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 12.5px; line-height: 1.9; }
+        .hist-row { display: flex; align-items: center; gap: 10px; font-size: 13px; padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,.05); }
+
+        /* ── Settings modal ── */
+        .modal-bg { position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.6); backdrop-filter: blur(6px); display: flex; align-items: center; justify-content: center; padding: 24px; }
+        .modal {
+            width: 100%; max-width: 620px; max-height: 88vh; overflow-y: auto; border-radius: 28px;
+            background: rgba(32,32,36,.92); border: 1px solid rgba(255,255,255,.12);
+            box-shadow: 0 40px 120px rgba(0,0,0,.6); padding: 26px; display: flex; flex-direction: column; gap: 16px;
+        }
+        .field label { display: block; font-size: 12px; color: rgba(255,255,255,.55); margin-bottom: 6px; }
+        .field input {
+            width: 100%; height: 42px; border-radius: 14px; padding: 0 14px; color: var(--text); font: inherit;
+            background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.12); outline: 0;
+        }
+        .field input:focus { border-color: var(--blue-text); }
+
+        /* Iconoir (MIT, github.com/iconoir-icons/iconoir) inlined as a sprite
+           so the NAS needs no CDN */
+        .ic { width: 1em; height: 1em; flex: none; stroke: currentColor; stroke-width: 1.5;
+              stroke-linecap: round; stroke-linejoin: round; }
+        .ic14 { width: 14px; height: 14px; }
+        .ic16 { width: 16px; height: 16px; }
+        .ic18 { width: 18px; height: 18px; }
+        .ic20 { width: 20px; height: 20px; }
+        .ic22 { width: 22px; height: 22px; }
+        .logo { display: flex; align-items: center; gap: 8px; }
+        .logo .ic { color: #60a5fa; stroke-width: 2; }
+        .tab, .search-btn, .pill, .ep-pill, .btn-primary, .btn-dl, .btn-mon,
+        .nav-circle, .round-x, .gear, .seg button, .back-pill {
+            display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+        }
+        .panel-title { display: flex; align-items: center; gap: 8px; }
+        .hchip { display: inline-flex; align-items: center; gap: 6px; }
+        .pulse { animation: pulse 1.6s ease-in-out infinite; }
+        @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
         .fade-in { animation: fade .2s ease; }
         @keyframes fade { from { opacity: 0 } to { opacity: 1 } }
+
+        @media (max-width: 2000px) {
+            .grid-3 { grid-template-columns: 420px minmax(0,1fr); }
+            .col-right { grid-column: 1 / -1; }
+            .cards { grid-template-columns: repeat(5, minmax(0,1fr)); }
+            .hero { height: 520px; }
+            .hero-poster { height: 400px; right: 60px; }
+            .hero-title { font-size: 46px; }
+        }
+        @media (max-width: 1200px) {
+            body { overflow: auto; }
+            .app-window { position: static; inset: auto; margin: 16px; border-radius: 24px; }
+            .grid-3 { grid-template-columns: minmax(0,1fr); }
+            .topbar { height: auto; gap: 14px; }
+            .cards { grid-template-columns: repeat(auto-fill, minmax(150px,1fr)); }
+            .hero { height: 420px; }
+            .hero-poster { display: none; }
+            .hero-title { font-size: 34px; }
+            .eps { grid-template-columns: repeat(2, minmax(0,1fr)); }
+            .detail-bottom { flex-wrap: wrap; gap: 20px; }
+            .detail-poster { width: 150px; }
+            .detail-title { font-size: 34px; }
+            .action-stack { width: 100%; }
+        }
     </style>
 </head>
-<body class="bg-gray-900 text-white font-sans antialiased overflow-x-hidden">
-    <div id="vanta-bg" class="fixed inset-0 z-0"></div>
+<body>
+    <svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true"><symbol id="ic-flash" viewBox="0 0 24 24" fill="none"><path d="M13 10V3L5 14H11V21L19 10H13Z" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ic-fire-flame" viewBox="0 0 24 24" fill="none"><path d="M8 18C8 20.4148 9.79086 21 12 21C15.7587 21 17 18.5 14.5 13.5C11 18 10.5 11 11 9C9.5 12 8 14.8177 8 18Z" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/> <path d="M12 21C17.0495 21 20 18.0956 20 13.125C20 8.15444 12 3 12 3C12 3 4 8.15444 4 13.125C4 18.0956 6.95054 21 12 21Z" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ic-tv" viewBox="0 0 24 24" fill="none"><path d="M2 20V9C2 7.89543 2.89543 7 4 7H20C21.1046 7 22 7.89543 22 9V20C22 21.1046 21.1046 22 20 22H4C2.89543 22 2 21.1046 2 20Z" stroke="currentColor" stroke-width="1.5"/> <path d="M8.5 2.5L12 6L15.5 2.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ic-search" viewBox="0 0 24 24" fill="none"><path d="M17 17L21 21" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/> <path d="M3 11C3 15.4183 6.58172 19 11 19C13.213 19 15.2161 18.1015 16.6644 16.6493C18.1077 15.2022 19 13.2053 19 11C19 6.58172 15.4183 3 11 3C6.58172 3 3 6.58172 3 11Z" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ic-settings" viewBox="0 0 24 24" fill="none"><path d="M12 15C13.6569 15 15 13.6569 15 12C15 10.3431 13.6569 9 12 9C10.3431 9 9 10.3431 9 12C9 13.6569 10.3431 15 12 15Z" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/> <path d="M19.6224 10.3954L18.5247 7.7448L20 6L18 4L16.2647 5.48295L13.5578 4.36974L12.9353 2H10.981L10.3491 4.40113L7.70441 5.51596L6 4L4 6L5.45337 7.78885L4.3725 10.4463L2 11V13L4.40111 13.6555L5.51575 16.2997L4 18L6 20L7.79116 18.5403L10.397 19.6123L11 22H13L13.6045 19.6132L16.2551 18.5155C16.6969 18.8313 18 20 18 20L20 18L18.5159 16.2494L19.6139 13.598L21.9999 12.9772L22 11L19.6224 10.3954Z" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ic-bell" viewBox="0 0 24 24" fill="none"><path d="M18 8.4C18 6.70261 17.3679 5.07475 16.2426 3.87452C15.1174 2.67428 13.5913 2 12 2C10.4087 2 8.88258 2.67428 7.75736 3.87452C6.63214 5.07475 6 6.70261 6 8.4C6 15.8667 3 18 3 18H21C21 18 18 15.8667 18 8.4Z" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/> <path d="M13.73 21C13.5542 21.3031 13.3019 21.5547 12.9982 21.7295C12.6946 21.9044 12.3504 21.9965 12 21.9965C11.6496 21.9965 11.3054 21.9044 11.0018 21.7295C10.6982 21.5547 10.4458 21.3031 10.27 21" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ic-bell-off" viewBox="0 0 24 24" fill="none"><path d="M6.27049 6.5C6.09277 7.10971 6 7.74975 6 8.4C6 15.8667 3 18 3 18H18" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/> <path d="M7.75732 3.87452C8.88254 2.67428 10.4087 2 12 2C13.5913 2 15.1174 2.67428 16.2426 3.87452C17.3678 5.07475 18 6.70261 18 8.4C18 15.8667 21 18 21 18" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/> <path d="M13.73 21C13.5542 21.3031 13.3019 21.5547 12.9982 21.7295C12.6946 21.9044 12.3504 21.9965 12 21.9965C11.6496 21.9965 11.3054 21.9044 11.0018 21.7295C10.6982 21.5547 10.4458 21.3031 10.27 21" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/> <path d="M3 3L21 21" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ic-hourglass" viewBox="0 0 24 24" fill="none"><path d="M12 12C15.866 12 19 8.86599 19 5H5C5 8.86599 8.13401 12 12 12ZM12 12C15.866 12 19 15.134 19 19H5C5 15.134 8.13401 12 12 12Z" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/> <path d="M5 2L12 2L19 2" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/> <path d="M5 22H12L19 22" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ic-xmark" viewBox="0 0 24 24" fill="none"><path d="M6.75827 17.2426L12.0009 12M17.2435 6.75736L12.0009 12M12.0009 12L6.75827 6.75736M12.0009 12L17.2435 17.2426" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ic-refresh-double" viewBox="0 0 24 24" fill="none"><path d="M21.1679 8C19.6247 4.46819 16.1006 2 11.9999 2C6.81459 2 2.55104 5.94668 2.04932 11" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/> <path d="M17 8H21.4C21.7314 8 22 7.73137 22 7.4V3" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/> <path d="M2.88146 16C4.42458 19.5318 7.94874 22 12.0494 22C17.2347 22 21.4983 18.0533 22 13" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/> <path d="M7.04932 16H2.64932C2.31795 16 2.04932 16.2686 2.04932 16.6V21" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ic-download" viewBox="0 0 24 24" fill="none"><path d="M6 20L18 20" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/> <path d="M12 4V16M12 16L15.5 12.5M12 16L8.5 12.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ic-folder" viewBox="0 0 24 24" fill="none"><path d="M2 11V4.6C2 4.26863 2.26863 4 2.6 4H8.77805C8.92127 4 9.05977 4.05124 9.16852 4.14445L12.3315 6.85555C12.4402 6.94876 12.5787 7 12.722 7H21.4C21.7314 7 22 7.26863 22 7.6V11M2 11V19.4C2 19.7314 2.26863 20 2.6 20H21.4C21.7314 20 22 19.7314 22 19.4V11M2 11H22" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ic-journal" viewBox="0 0 24 24" fill="none"><path d="M6 6L18 6" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/> <path d="M6 10H18" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/> <path d="M13 14L18 14" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/> <path d="M13 18L18 18" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/> <path d="M2 21.4V2.6C2 2.26863 2.26863 2 2.6 2H21.4C21.7314 2 22 2.26863 22 2.6V21.4C22 21.7314 21.7314 22 21.4 22H2.6C2.26863 22 2 21.7314 2 21.4Z" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/> <path d="M6 18V14H9V18H6Z" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ic-movie" viewBox="0 0 24 24" fill="none"><path d="M7 8.01L7.01 7.99889" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/> <path d="M17 8.01L17.01 7.99889" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/> <path d="M7 12.01L7.01 11.9989" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/> <path d="M17 12.01L17.01 11.9989" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/> <path d="M7 16.01L7.01 15.9989" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/> <path d="M17 16.01L17.01 15.9989" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/> <path d="M7 2H3.6C3.26863 2 3 2.26863 3 2.6V21.4C3 21.7314 3.26863 22 3.6 22H7M7 2V4M7 2H17M17 2H20.4C20.7314 2 21 2.26863 21 2.6V21.4C21 21.7314 20.7314 22 20.4 22H17M17 2V4M17 22V20M17 22H7M7 22V20" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ic-check" viewBox="0 0 24 24" fill="none"><path d="M5 13L9 17L19 7" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ic-nav-arrow-left" viewBox="0 0 24 24" fill="none"><path d="M15 6L9 12L15 18" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ic-nav-arrow-right" viewBox="0 0 24 24" fill="none"><path d="M9 6L15 12L9 18" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ic-nav-arrow-up" viewBox="0 0 24 24" fill="none"><path d="M6 15L12 9L18 15" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ic-nav-arrow-down" viewBox="0 0 24 24" fill="none"><path d="M6 9L12 15L18 9" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ic-arrow-left" viewBox="0 0 24 24" fill="none"><path d="M21 12L3 12M3 12L11.5 3.5M3 12L11.5 20.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ic-prohibition" viewBox="0 0 24 24" fill="none"><path d="M19.1414 5C17.3265 3.14864 14.7974 2 12 2C6.47715 2 2 6.47715 2 12C2 14.7255 3.09032 17.1962 4.85857 19M19.1414 5C20.9097 6.80375 22 9.27455 22 12C22 17.5228 17.5228 22 12 22C9.20261 22 6.67349 20.8514 4.85857 19M19.1414 5L4.85857 19" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></symbol><symbol id="ic-star-solid" viewBox="0 0 24 24" fill="none"><path d="M8.58737 8.23597L11.1849 3.00376C11.5183 2.33208 12.4817 2.33208 12.8151 3.00376L15.4126 8.23597L21.2215 9.08017C21.9668 9.18848 22.2638 10.0994 21.7243 10.6219L17.5217 14.6918L18.5135 20.4414C18.6409 21.1798 17.8614 21.7428 17.1945 21.3941L12 18.678L6.80547 21.3941C6.1386 21.7428 5.35909 21.1798 5.48645 20.4414L6.47825 14.6918L2.27575 10.6219C1.73617 10.0994 2.03322 9.18848 2.77852 9.08017L8.58737 8.23597Z" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol></svg>
+    <!-- Layered background -->
+    <div class="bg-root" aria-hidden="true">
+        <div class="bg-base">
+            <div class="streak s1"></div><div class="streak s2"></div><div class="streak s3"></div>
+            <div class="streak s4"></div><div class="streak s5"></div>
+        </div>
+        <div class="bg-grain"></div>
+        <div class="bg-dots"></div>
+    </div>
 
-    <div class="relative z-10 container mx-auto p-4 max-w-6xl min-h-screen flex flex-col" x-data="app()" x-init="init()">
-        <!-- Header -->
-        <header class="mb-6 flex justify-between items-center glass-panel p-4 rounded-lg shadow-lg">
-            <div>
-                <h1 class="text-3xl font-bold bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-transparent">
-                    ⚡ Zapflix
-                </h1>
-                <div class="text-sm text-gray-400">NAS Edition · Real-Debrid
-                    <span class="text-gray-600" x-show="status.version" x-text="'· v' + status.version"></span>
+    <div class="app-window" x-data="app()" x-init="init()">
+
+        <!-- ══ Top bar ══ -->
+        <header class="topbar grid-3">
+            <div class="tb-left">
+                <div>
+                    <div class="logo"><svg class="ic ic22"><use href="#ic-flash"/></svg>Zapflix</div>
+                    <div class="logo-sub">NAS Edition · Real-Debrid<span x-show="status.version" x-text="' · v' + status.version"></span></div>
                 </div>
+                <nav class="tabs">
+                    <button class="tab" :class="view === 'catalog' && results.length === 0 && 'active'" @click="goDiscover()">Discover</button>
+                    <button class="tab" :class="discoverTab === 'movies' && results.length === 0 && 'active'" @click="setDiscoverTab('movies')"><svg class="ic ic16"><use href="#ic-fire-flame"/></svg>Movies</button>
+                    <button class="tab" :class="discoverTab === 'series' && results.length === 0 && 'active'" @click="setDiscoverTab('series')"><svg class="ic ic16"><use href="#ic-tv"/></svg>Series</button>
+                </nav>
             </div>
-            <div class="flex items-center gap-4">
-                <div class="text-right text-xs text-gray-400 space-y-1">
-                    <div x-text="status.config_found ? '✅ Config Loaded' : '❌ Config Missing'"></div>
-                    <div :class="status.clients?.rd ? 'text-green-500 font-bold' : 'text-gray-600'"
-                         x-text="status.clients?.rd ? 'RD Active' : 'RD Inactive'"></div>
-                    <div :class="status.clients?.aria2 ? 'text-green-500' : 'text-gray-600'"
-                         x-text="status.clients?.aria2 ? 'aria2 → NAS' : 'aria2 off'"></div>
-                    <div x-show="status.clients?.jellyfin" class="text-green-500">Jellyfin sync</div>
-                </div>
-                <button @click="openSettings()" title="Settings"
-                        class="text-2xl hover:rotate-45 transition-transform duration-300">⚙️</button>
+
+            <form class="searchbar" @submit.prevent="search">
+                <svg class="ic ic20 search-glyph"><use href="#ic-search"/></svg>
+                <input type="text" x-model="query" placeholder="Search movies or series (e.g. 'Teen Wolf')...">
+                <button type="submit" class="search-btn" :disabled="searching" x-text="searching ? 'Searching…' : 'Search'"></button>
+            </form>
+
+            <div class="tb-right">
+                <div class="chip"><span class="dot" :class="!status.config_found && 'off'"></span> Config Loaded</div>
+                <div class="chip"><span class="dot" :class="!status.clients?.rd && 'off'"></span> RD Active</div>
+                <div class="chip"><span class="dot" :class="!status.clients?.aria2 && 'off'"></span> aria2 → NAS</div>
+                <div class="chip"><span class="dot" :class="!status.clients?.jellyfin && 'off'"></span> Jellyfin sync</div>
+                <button class="gear" @click="openSettings()" title="Settings"><svg class="ic ic20"><use href="#ic-settings"/></svg></button>
             </div>
         </header>
 
-        <!-- Search -->
-        <div class="mb-6 glass-panel p-4 rounded-lg shadow-xl">
-            <form @submit.prevent="search" class="flex gap-2">
-                <input type="text" x-model="query" placeholder="Search movies or series (e.g. 'Teen Wolf')..."
-                       class="flex-1 p-3 rounded bg-gray-800 bg-opacity-50 border border-gray-600 focus:outline-none focus:border-blue-500 text-white placeholder-gray-400 transition">
-                <button type="submit" :disabled="searching"
-                        class="px-6 py-3 bg-blue-600 rounded font-semibold shadow hover:bg-blue-700 transition disabled:opacity-50">
-                    <span x-text="searching ? 'Searching…' : 'Search'"></span>
-                </button>
-            </form>
-        </div>
+        <!-- ══ Body ══ -->
+        <div class="body-grid grid-3">
 
-        <!-- Poster grid -->
-        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 mb-8 fade-in"
-             x-show="results.length > 0 && view === 'catalog'">
-            <template x-for="item in results" :key="item.imdb_id">
-                <div @click="openDetail(item)"
-                     class="poster-card cursor-pointer glass-panel rounded-lg overflow-hidden flex flex-col">
-                    <div class="relative bg-gray-800" style="padding-bottom:150%;">
-                        <img :src="item.poster" :alt="item.name" loading="lazy"
-                             @error="$el.src='data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22300%22><rect width=%22200%22 height=%22300%22 fill=%22%23374151%22/></svg>'"
-                             class="absolute inset-0 w-full h-full object-cover">
-                        <span class="absolute top-2 left-2 text-xs font-bold px-2 py-1 rounded"
-                              :class="item.type === 'movie' ? 'bg-green-600' : 'bg-purple-600'"
-                              x-text="item.type?.toUpperCase()"></span>
-                        <span x-show="inLibrary(item)" title="Already delivered by Zapflix"
-                              class="absolute top-2 right-2 text-xs font-bold px-2 py-1 rounded bg-green-500 text-gray-900">✓</span>
+            <!-- ── Left column ── -->
+            <div class="col">
+                <!-- Monitored shows -->
+                <div class="panel" x-show="monitored.length > 0" x-cloak>
+                    <div class="panel-head">
+                        <div class="panel-title"><svg class="ic ic18"><use href="#ic-bell"/></svg>Monitored shows <span class="count" x-text="'· ' + monitored.length"></span></div>
+                        <button class="pill" @click="checkNow()">Check now</button>
                     </div>
-                    <div class="p-2">
-                        <div class="font-semibold text-sm leading-tight truncate" x-text="item.name" :title="item.name"></div>
-                        <div class="text-xs text-gray-400" x-text="item.year"></div>
-                    </div>
-                </div>
-            </template>
-        </div>
-
-        <!-- Discover (home screen when nothing searched) -->
-        <div x-show="view === 'catalog' && results.length === 0" x-cloak class="mb-8 fade-in">
-            <template x-for="section in [{title: '🔥 Trending Movies', items: discover.movies}, {title: '📺 Trending Series', items: discover.series}]" :key="section.title">
-                <div class="mb-8" x-show="section.items.length > 0">
-                    <h2 class="text-lg font-bold mb-3 text-gray-200" x-text="section.title"></h2>
-                    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                        <template x-for="item in section.items.slice(0, 10)" :key="item.imdb_id">
-                            <div @click="openDetail(item)"
-                                 class="poster-card cursor-pointer glass-panel rounded-lg overflow-hidden flex flex-col">
-                                <div class="relative bg-gray-800" style="padding-bottom:150%;">
-                                    <img :src="item.poster" :alt="item.name" loading="lazy"
-                                         @error="$el.src='data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%22200%22 height=%22300%22><rect width=%22200%22 height=%22300%22 fill=%22%23374151%22/></svg>'"
-                                         class="absolute inset-0 w-full h-full object-cover">
-                                    <span x-show="inLibrary(item)" title="Already delivered by Zapflix"
-                                          class="absolute top-2 right-2 text-xs font-bold px-2 py-1 rounded bg-green-500 text-gray-900">✓</span>
+                    <div class="scroll" style="max-height:280px">
+                        <template x-for="m in monitored" :key="m.imdb_id">
+                            <div class="row" style="padding:5px 0">
+                                <img class="thumb" style="width:56px;height:84px" :src="posterFor(m.name)"
+                                     @error="$el.style.visibility='hidden'" alt="">
+                                <div style="flex:1;min-width:0">
+                                    <div class="ell" style="font-size:15px;font-weight:600" x-text="m.name"></div>
+                                    <div style="font-size:12.5px;color:rgba(255,255,255,.6);margin-top:2px"
+                                         x-text="m.last_grab ? ('last grab ' + m.last_grab) : 'waiting for new episodes'"></div>
+                                    <div style="font-size:12px;color:rgba(255,255,255,.42);margin-top:1px"
+                                         x-text="m.last_check ? ('checked ' + fmtTime(m.last_check)) : 'not checked yet'"></div>
                                 </div>
-                                <div class="p-2">
-                                    <div class="font-semibold text-sm leading-tight truncate" x-text="item.name" :title="item.name"></div>
-                                    <div class="text-xs text-gray-400" x-text="item.year"></div>
-                                </div>
+                                <button class="round-x" @click="unmonitor(m)" title="Stop monitoring"><svg class="ic ic16"><use href="#ic-xmark"/></svg></button>
                             </div>
                         </template>
                     </div>
                 </div>
-            </template>
-        </div>
 
-        <!-- Detail view -->
-        <div x-show="view === 'detail'" x-cloak class="mb-8 fade-in">
-            <button @click="closeDetail()" class="mb-3 text-sm text-blue-400 hover:text-blue-300">← Back to results</button>
-            <div class="glass-panel rounded-lg overflow-hidden shadow-2xl">
-                <!-- Backdrop -->
-                <div class="h-40 md:h-56 bg-cover bg-center"
-                     :style="detail.data && detail.data.background ? `background-image:linear-gradient(to top, rgba(17,24,39,1), rgba(17,24,39,.35)), url('${detail.data.background}')` : 'background:#1f2937'"></div>
-                <div class="p-5 -mt-20 relative flex flex-col md:flex-row gap-5">
-                    <img x-show="detail.data && detail.data.poster" :src="detail.data && detail.data.poster"
-                         class="w-32 md:w-44 rounded-lg shadow-lg flex-shrink-0 border border-gray-700">
-                    <div class="flex-1 min-w-0">
-                        <template x-if="detail.loading">
-                            <div class="text-gray-400 mt-16">Loading details…</div>
-                        </template>
-                        <template x-if="!detail.loading && detail.data">
-                            <div>
-                                <h2 class="text-2xl md:text-3xl font-bold" x-text="detail.data.name"></h2>
-                                <div class="flex flex-wrap items-center gap-3 text-sm text-gray-300 mt-1">
-                                    <span x-text="detail.data.year"></span>
-                                    <span x-show="detail.data.rating" class="text-yellow-400 font-bold">★ <span x-text="detail.data.rating"></span></span>
-                                    <span x-show="detail.data.runtime" x-text="detail.data.runtime"></span>
-                                    <span class="text-xs px-2 py-0.5 rounded"
-                                          :class="detail.data.type === 'movie' ? 'bg-green-700' : 'bg-purple-700'"
-                                          x-text="detail.data.type?.toUpperCase()"></span>
+                <!-- NAS downloads -->
+                <div class="panel grow">
+                    <div class="panel-head">
+                        <div class="panel-title">NAS downloads <span class="count">· aria2</span></div>
+                        <div style="font-size:12.5px;display:flex;gap:10px">
+                            <span style="color:#60a5fa" x-text="countBy('active') + ' active'"></span>
+                            <span style="color:#facc15" x-show="countBy('waiting')" x-text="countBy('waiting') + ' queued'"></span>
+                            <span style="color:#22c55e" x-show="countBy('complete')" x-text="countBy('complete') + ' done'"></span>
+                            <span style="color:#f87171" x-show="countBy('error')" x-text="countBy('error') + ' failed'"></span>
+                        </div>
+                    </div>
+                    <div class="scroll" style="flex:1">
+                        <template x-for="d in downloads" :key="d.gid">
+                            <div style="padding:7px 0">
+                                <div class="row" style="gap:12px">
+                                    <img class="thumb" style="width:40px;height:60px;border-radius:6px"
+                                         :src="posterFor(titleFromFile(d.name))" @error="$el.style.visibility='hidden'" alt="">
+                                    <div style="flex:1;min-width:0">
+                                        <div class="ell" style="font-size:14px;font-weight:500" x-text="d.name" :title="d.name"></div>
+                                        <div class="bar">
+                                            <div :style="'width:' + Math.max(d.progress,2) + '%;background:' +
+                                                 (d.status === 'error' ? '#ef4444' : d.status === 'complete' ? '#22c55e' : '#3b82f6')"></div>
+                                        </div>
+                                    </div>
+                                    <div style="font-size:12.5px;white-space:nowrap;display:flex;align-items:center;gap:8px">
+                                        <template x-if="d.status === 'active'">
+                                            <span style="color:#9ca3af"><span x-text="fmtBytes(d.speed) + '/s'"></span> · <span x-text="fmtEta(d.eta)"></span></span>
+                                        </template>
+                                        <span x-show="d.status === 'waiting'" style="color:#facc15">queued</span>
+                                        <span x-show="d.status === 'complete'" style="color:#22c55e;display:inline-flex;align-items:center;gap:4px"><svg class="ic ic14"><use href="#ic-check"/></svg><span x-text="fmtBytes(d.total)"></span></span>
+                                        <span x-show="d.status === 'error'" style="color:#f87171;display:inline-flex;align-items:center;gap:4px" :title="d.error"><svg class="ic ic14"><use href="#ic-xmark"/></svg>failed</span>
+                                        <button class="round-x" style="width:26px;height:26px;font-size:12px"
+                                                x-show="d.status === 'active' || d.status === 'waiting'"
+                                                @click="cancelDownload(d)" title="Cancel"><svg class="ic ic14"><use href="#ic-xmark"/></svg></button>
+                                    </div>
                                 </div>
-                                <div class="mt-1 text-xs text-gray-400" x-text="(detail.data.genres||[]).join(' · ')"></div>
-                                <p class="mt-3 text-sm text-gray-300 leading-relaxed max-h-32 overflow-y-auto" x-text="detail.data.description"></p>
+                            </div>
+                        </template>
+                        <div x-show="downloads.length === 0" style="color:rgba(255,255,255,.4);font-size:13px;text-align:center;margin-top:24px">
+                            Nothing downloading.
+                        </div>
+                    </div>
+                </div>
+            </div>
 
-                                <!-- Movie: destination + single button -->
-                                <template x-if="detail.data.type === 'movie'">
-                                    <div class="mt-4 flex items-center gap-2">
-                                        <select x-show="status.library?.folders?.length" x-model="destFolder" x-effect="destFolder; $nextTick(() => $el.value = destFolder)"
-                                                title="Destination folder on the NAS"
-                                                class="px-3 py-3 rounded bg-gray-800 border border-gray-600 text-sm focus:outline-none focus:border-blue-500">
-                                            <option value="">📁 (library root)</option>
-                                            <template x-for="f in status.library?.folders || []" :key="f">
-                                                <option :value="f" x-text="'📁 ' + f"></option>
-                                            </template>
-                                        </select>
-                                        <button @click="startDownload()" :disabled="downloading"
-                                                class="px-6 py-3 bg-green-600 rounded font-bold shadow hover:bg-green-700 transition disabled:opacity-50">
-                                            <span x-text="downloading ? 'Queued ✓' : '⬇ Download Movie'"></span>
+            <!-- ── Center column ── -->
+            <div class="col scroll" style="padding-right:4px">
+
+                <!-- Discover: hero + trending row -->
+                <template x-if="view === 'catalog' && results.length === 0">
+                    <div class="col fade-in">
+                        <div class="hero" x-show="heroItem()" x-cloak>
+                            <img class="hero-img" :src="heroItem()?.background || heroItem()?.poster" @error="$el.style.display='none'" alt="">
+                            <div class="hero-overlay"></div>
+                            <img class="hero-poster" :src="heroItem()?.poster" @click="openDetail(heroItem())"
+                                 @error="$el.style.visibility='hidden'" alt="">
+                            <div class="hero-text">
+                                <div class="hero-chips">
+                                    <span class="hchip"><svg class="ic ic14"><use href="#ic-fire-flame"/></svg>Trending</span>
+                                    <span class="hchip" :class="heroItem()?.type === 'movie' ? 'movie' : 'series'"
+                                          x-text="heroItem()?.type?.toUpperCase()"></span>
+                                </div>
+                                <h1 class="hero-title ell" x-text="heroItem()?.name" @click="openDetail(heroItem())"></h1>
+                                <div class="hero-meta" x-text="heroItem()?.year"></div>
+                                <div class="hero-actions">
+                                    <template x-if="heroItem()?.type === 'movie'">
+                                        <button class="btn-primary" :disabled="downloading" @click="quickDownloadMovie(heroItem())">
+                                            <svg class="ic ic18" x-show="!downloading"><use href="#ic-download"/></svg>
+                                            <svg class="ic ic18" x-show="downloading" x-cloak><use href="#ic-check"/></svg>
+                                            <span x-text="downloading ? 'Queued' : 'Download Movie'"></span>
                                         </button>
+                                    </template>
+                                    <template x-if="heroItem()?.type !== 'movie'">
+                                        <button class="btn-primary" @click="openDetail(heroItem())">Open</button>
+                                    </template>
+                                    <select class="folder-select" x-model="destFolder" x-show="status.library?.folders?.length"
+                                            x-effect="destFolder; $nextTick(() => $el.value = destFolder)">
+                                        <option value="">📁 (library root)</option>
+                                        <template x-for="f in status.library?.folders || []" :key="f">
+                                            <option :value="f" x-text="'📁 ' + f"></option>
+                                        </template>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="hero-nav">
+                                <button class="nav-circle" @click="heroPrev()"><svg class="ic ic20"><use href="#ic-nav-arrow-left"/></svg></button>
+                                <button class="nav-circle" @click="heroNext()"><svg class="ic ic20"><use href="#ic-nav-arrow-right"/></svg></button>
+                            </div>
+                        </div>
+
+                        <div class="row-head">
+                            <div class="row-title" style="display:flex;align-items:center;gap:10px">
+                                <svg class="ic ic22" x-show="discoverTab === 'movies'"><use href="#ic-fire-flame"/></svg>
+                                <svg class="ic ic22" x-show="discoverTab === 'series'" x-cloak><use href="#ic-tv"/></svg>
+                                <span x-text="discoverTab === 'movies' ? 'Trending Movies' : 'Trending Series'"></span>
+                            </div>
+                            <div class="seg">
+                                <button :class="discoverTab === 'movies' && 'on'" @click="setDiscoverTab('movies')">Movies</button>
+                                <button :class="discoverTab === 'series' && 'on'" @click="setDiscoverTab('series')">Series</button>
+                            </div>
+                        </div>
+                        <div class="cards">
+                            <template x-for="item in (discover[discoverTab] || []).slice(0, 12)" :key="item.imdb_id">
+                                <div class="card" @click="openDetail(item)">
+                                    <img :src="item.poster" loading="lazy" @error="$el.style.display='none'" alt="">
+                                    <div class="card-overlay"></div>
+                                    <span class="card-type" :class="item.type === 'movie' ? 'movie' : 'series'" x-text="item.type?.toUpperCase()"></span>
+                                    <div class="card-check" x-show="inLibrary(item)" title="Already delivered"><svg class="ic ic20" style="stroke-width:2.5"><use href="#ic-check"/></svg></div>
+                                    <div class="card-foot">
+                                        <div class="card-name ell" x-text="item.name" :title="item.name"></div>
+                                        <div class="card-year" x-text="item.year"></div>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+
+                <!-- Search results -->
+                <template x-if="view === 'catalog' && results.length > 0">
+                    <div class="col fade-in">
+                        <div class="row-head">
+                            <div class="row-title" x-text="'Results for “' + query + '”'"></div>
+                            <button class="pill" @click="goDiscover()">Clear</button>
+                        </div>
+                        <div class="cards wrap">
+                            <template x-for="item in results" :key="item.imdb_id">
+                                <div class="card" @click="openDetail(item)">
+                                    <img :src="item.poster" loading="lazy" @error="$el.style.display='none'" alt="">
+                                    <div class="card-overlay"></div>
+                                    <span class="card-type" :class="item.type === 'movie' ? 'movie' : 'series'" x-text="item.type?.toUpperCase()"></span>
+                                    <div class="card-check" x-show="inLibrary(item)" title="Already delivered"><svg class="ic ic20" style="stroke-width:2.5"><use href="#ic-check"/></svg></div>
+                                    <div class="card-foot">
+                                        <div class="card-name ell" x-text="item.name" :title="item.name"></div>
+                                        <div class="card-year" x-text="item.year"></div>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+                </template>
+
+                <!-- Detail -->
+                <template x-if="view === 'detail'">
+                    <div class="col fade-in">
+                        <div class="detail-head">
+                            <img class="hero-img" :src="detail.data?.background || detail.data?.poster" @error="$el.style.display='none'" alt="">
+                            <div class="detail-overlay"></div>
+                            <button class="back-pill" @click="closeDetail()"><svg class="ic ic16"><use href="#ic-arrow-left"/></svg>Back to results</button>
+                            <div x-show="detail.loading" style="position:absolute;left:40px;bottom:40px;color:rgba(255,255,255,.6)">Loading details…</div>
+                            <div class="detail-bottom" x-show="!detail.loading && detail.data" x-cloak>
+                                <img class="detail-poster" :src="detail.data?.poster" @error="$el.style.visibility='hidden'" alt="">
+                                <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:12px">
+                                    <div class="hero-chips">
+                                        <span class="hchip" :class="detail.data?.type === 'movie' ? 'movie' : 'series'" x-text="detail.data?.type?.toUpperCase()"></span>
+                                        <template x-for="g in (detail.data?.genres || []).slice(0,3)" :key="g">
+                                            <span class="hchip" x-text="g"></span>
+                                        </template>
+                                    </div>
+                                    <h1 class="detail-title" x-text="detail.data?.name"></h1>
+                                    <div class="detail-meta">
+                                        <span x-text="detail.data?.year"></span>
+                                        <span x-show="detail.data?.rating" style="color:#facc15;font-weight:700;display:inline-flex;align-items:center;gap:5px"><svg class="ic ic16" style="stroke:none"><use href="#ic-star-solid"/></svg><span x-text="detail.data?.rating"></span></span>
+                                        <span x-show="detail.data?.runtime" x-text="detail.data?.runtime"></span>
+                                    </div>
+                                    <p class="detail-plot" x-text="detail.data?.description"></p>
+                                </div>
+                                <div class="action-stack">
+                                    <template x-if="detail.data?.type === 'series'">
+                                        <button class="btn-dl" :disabled="downloading || selectedCount() === 0" @click="startDownload()">
+                                            <svg class="ic ic18" x-show="!downloading"><use href="#ic-download"/></svg>
+                                            <svg class="ic ic18" x-show="downloading" x-cloak><use href="#ic-check"/></svg>
+                                            <span x-text="downloading ? 'Queued' : 'Download selected'"></span>
+                                        </button>
+                                    </template>
+                                    <template x-if="detail.data?.type === 'movie'">
+                                        <button class="btn-dl" :disabled="downloading" @click="startDownload()">
+                                            <svg class="ic ic18" x-show="!downloading"><use href="#ic-download"/></svg>
+                                            <svg class="ic ic18" x-show="downloading" x-cloak><use href="#ic-check"/></svg>
+                                            <span x-text="downloading ? 'Queued' : 'Download Movie'"></span>
+                                        </button>
+                                    </template>
+                                    <button class="btn-mon" x-show="detail.data?.type === 'series'"
+                                            :class="isMonitored(detail.item?.imdb_id) && 'on'" @click="toggleMonitor()"
+                                            ><svg class="ic ic18" x-show="isMonitored(detail.item?.imdb_id)" x-cloak><use href="#ic-bell"/></svg><svg class="ic ic18" x-show="!isMonitored(detail.item?.imdb_id)"><use href="#ic-bell-off"/></svg><span x-text="isMonitored(detail.item?.imdb_id) ? 'Monitoring' : 'Monitor'"></span></button>
+                                    <select class="folder-select sm" x-model="destFolder" x-show="status.library?.folders?.length"
+                                            x-effect="destFolder; $nextTick(() => $el.value = destFolder)">
+                                        <option value="">📁 (library root)</option>
+                                        <template x-for="f in status.library?.folders || []" :key="f">
+                                            <option :value="f" x-text="'📁 ' + f"></option>
+                                        </template>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Episode picker -->
+                        <div class="panel grow" x-show="!detail.loading && detail.data?.type === 'series'" x-cloak>
+                            <div class="ep-toolbar">
+                                <div style="display:flex;gap:8px">
+                                    <button class="ep-pill" :class="lastSelect === 'all' && 'on'" @click="toggleAll(true); lastSelect='all'">Select all</button>
+                                    <button class="ep-pill" :class="lastSelect === 'missing' && 'on'" x-show="seriesInLibrary()"
+                                            @click="selectMissing(); lastSelect='missing'">Select missing</button>
+                                    <button class="ep-pill" :class="lastSelect === 'clear' && 'on'" @click="toggleAll(false); lastSelect='clear'">Clear</button>
+                                </div>
+                                <div style="font-size:14px;color:rgba(255,255,255,.65)" x-text="selectedCount() + ' episode(s) selected'"></div>
+                            </div>
+                            <div class="scroll" style="flex:1">
+                                <template x-for="s in detail.data?.seasons || []" :key="s.season">
+                                    <div class="season">
+                                        <div class="season-head" @click="toggleExpand(s.season)">
+                                            <div style="display:flex;align-items:center;gap:10px;min-width:0">
+                                                <button class="cbox" :class="isSeasonAll(s.season) && 'on'"
+                                                        @click.stop="toggleSeason(s.season)"><svg class="ic" style="width:12px;height:12px;stroke-width:3"><use href="#ic-check"/></svg></button>
+                                                <span style="font-size:15px;font-weight:600" x-text="'Season ' + s.season"></span>
+                                                <span style="font-size:13px;color:rgba(255,255,255,.5)" x-text="'· ' + s.episodes.length + ' ep'"></span>
+                                            </div>
+                                            <div style="display:flex;align-items:center;gap:12px;font-size:13px;white-space:nowrap">
+                                                <span style="color:#4ade80" x-show="seasonDelivered(s.season) > 0"
+                                                      style="display:inline-flex;align-items:center;gap:4px"><svg class="ic ic14"><use href="#ic-check"/></svg><span x-text="seasonDelivered(s.season) + '/' + s.episodes.length"></span></span>
+                                                <span style="color:rgba(255,255,255,.5)" x-show="seasonSelected(s.season) > 0"
+                                                      x-text="seasonSelected(s.season) + ' selected'"></span>
+                                                <svg class="ic ic16" style="color:rgba(255,255,255,.5)" x-show="expanded[s.season]" x-cloak><use href="#ic-nav-arrow-up"/></svg>
+                                                <svg class="ic ic16" style="color:rgba(255,255,255,.5)" x-show="!expanded[s.season]"><use href="#ic-nav-arrow-down"/></svg>
+                                            </div>
+                                        </div>
+                                        <div class="eps" x-show="expanded[s.season]">
+                                            <template x-for="ep in s.episodes" :key="ep.episode">
+                                                <div class="ep" :class="isEpisodeSelected(s.season, ep.episode) && 'sel'"
+                                                     @click="toggleEpisode(s.season, ep.episode)">
+                                                    <button class="cbox" :class="isEpisodeSelected(s.season, ep.episode) && 'on'"
+                                                            style="width:16px;height:16px"><svg class="ic" style="width:10px;height:10px;stroke-width:3"><use href="#ic-check"/></svg></button>
+                                                    <span class="ep-num" x-text="'E' + String(ep.episode).padStart(2,'0')"></span>
+                                                    <span class="ell" :style="epInLibrary(s.season, ep.episode) && 'color:#4ade80'"
+                                                          x-text="ep.name" :title="ep.name"></span>
+                                                    <svg class="ic ic14" x-show="epInLibrary(s.season, ep.episode)" style="color:#22c55e;margin-left:auto"><use href="#ic-check"/></svg>
+                                                </div>
+                                            </template>
+                                        </div>
                                     </div>
                                 </template>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+
+            <!-- ── Right column ── -->
+            <div class="col col-right">
+                <!-- Active tasks -->
+                <div class="panel tasks" x-show="tasks.length > 0" x-cloak>
+                    <div class="panel-title"><svg class="ic ic18"><use href="#ic-hourglass"/></svg>Active tasks <span class="count" x-text="'· ' + tasks.length"></span></div>
+                    <template x-for="t in tasks" :key="t.id">
+                        <div class="row">
+                            <span class="pulse" style="color:#60a5fa">●</span>
+                            <div style="flex:1;min-width:0">
+                                <div class="ell" style="font-size:15px;font-weight:600" x-text="t.name"></div>
+                                <div style="font-size:12.5px;color:rgba(255,255,255,.6)"
+                                     x-text="t.type + ' · started ' + new Date(t.started * 1000).toLocaleTimeString()"></div>
+                            </div>
+                            <button @click="cancelTask(t)" :disabled="t.cancelling"
+                                    style="font-size:13px;font-weight:600;padding:9px 16px;border-radius:20px;border:0;cursor:pointer;color:#fff"
+                                    :style="t.cancelling ? 'background:#374151' : 'background:#b91c1c'"
+                                    ><svg class="ic ic16"><use href="#ic-prohibition"/></svg><span x-text="t.cancelling ? 'Stopping…' : 'Cancel'"></span></button>
+                        </div>
+                    </template>
+                </div>
+
+                <!-- Failed files -->
+                <div class="panel failed" x-show="failures.length > 0" x-cloak>
+                    <div class="panel-head">
+                        <div class="panel-title">Failed files <span class="count" x-text="'· ' + failures.length"></span></div>
+                        <div style="display:flex;gap:8px">
+                            <button class="pill" style="color:#bfdbfe" :disabled="retrying" @click="retryAllFailures()"
+                                    ><svg class="ic ic14"><use href="#ic-refresh-double"/></svg><span x-text="retrying ? 'Retrying…' : 'Retry all'"></span></button>
+                            <button class="pill" @click="clearFailures()">Clear all</button>
+                        </div>
+                    </div>
+                    <div class="scroll" style="max-height:220px">
+                        <template x-for="f in failures" :key="f.id">
+                            <div class="row" style="padding:5px 0">
+                                <div style="flex:1;min-width:0">
+                                    <div class="ell" style="font-size:14px;font-weight:500" x-text="f.filename" :title="f.filename"></div>
+                                    <div style="font-size:12.5px;color:#fca5a5" x-text="f.reason"></div>
+                                </div>
+                                <button class="pill" style="background:#2563eb;font-weight:600;padding:7px 14px;border-radius:16px"
+                                        :disabled="retrying" @click="retryFailure(f)">Retry</button>
+                                <button class="pill" @click="dismissFailure(f)">Dismiss</button>
                             </div>
                         </template>
                     </div>
                 </div>
 
-                <!-- Series: season/episode selection -->
-                <template x-if="!detail.loading && detail.data && detail.data.type === 'series'">
-                    <div class="px-5 pb-5">
-                        <div class="flex flex-wrap items-center justify-between gap-2 border-t border-gray-700 pt-4 mb-3">
-                            <div class="flex items-center gap-2">
-                                <button @click="toggleAll(true)" class="text-xs px-3 py-1 bg-gray-700 rounded hover:bg-gray-600">Select all</button>
-                                <button @click="selectMissing()" x-show="seriesInLibrary()"
-                                        class="text-xs px-3 py-1 bg-gray-700 rounded hover:bg-gray-600"
-                                        title="Select only episodes Zapflix hasn't delivered yet">Select missing</button>
-                                <button @click="toggleAll(false)" class="text-xs px-3 py-1 bg-gray-700 rounded hover:bg-gray-600">Clear</button>
-                                <span class="text-xs text-gray-400" x-text="selectedCount() + ' episode(s) selected'"></span>
-                            </div>
-                            <div class="flex items-center gap-2">
-                                <select x-show="status.library?.folders?.length" x-model="destFolder" x-effect="destFolder; $nextTick(() => $el.value = destFolder)"
-                                        title="Destination folder on the NAS (also used for monitored grabs)"
-                                        class="px-3 py-2 rounded bg-gray-800 border border-gray-600 text-sm focus:outline-none focus:border-blue-500">
-                                    <option value="">📁 (library root)</option>
-                                    <template x-for="f in status.library?.folders || []" :key="f">
-                                        <option :value="f" x-text="'📁 ' + f"></option>
-                                    </template>
-                                </select>
-                                <button @click="toggleMonitor()"
-                                        :class="isMonitored(detail.item?.imdb_id) ? 'bg-yellow-600 hover:bg-yellow-700' : 'bg-gray-700 hover:bg-gray-600'"
-                                        class="px-4 py-2 rounded font-bold shadow transition"
-                                        title="Auto-download new episodes as they air">
-                                    <span x-text="isMonitored(detail.item?.imdb_id) ? '🔔 Monitoring' : '🔕 Monitor'"></span>
-                                </button>
-                                <button @click="startDownload()" :disabled="downloading || selectedCount()===0"
-                                        class="px-5 py-2 bg-green-600 rounded font-bold shadow hover:bg-green-700 transition disabled:opacity-40">
-                                    <span x-text="downloading ? 'Queued ✓' : '⬇ Download selected'"></span>
-                                </button>
-                            </div>
+                <!-- Logs / History -->
+                <div class="panel logs grow">
+                    <div class="panel-head">
+                        <div class="seg">
+                            <button :class="bottomTab === 'logs' && 'on'" style="letter-spacing:.06em;font-size:12px"
+                                    @click="bottomTab = 'logs'">SYSTEM LOGS</button>
+                            <button :class="bottomTab === 'history' && 'on'" style="letter-spacing:.06em;font-size:12px"
+                                    @click="bottomTab = 'history'; fetchHistory()"><svg class="ic ic14"><use href="#ic-journal"/></svg>HISTORY</button>
                         </div>
-
-                        <template x-for="s in detail.data.seasons" :key="s.season">
-                            <div class="mb-2 bg-gray-800 bg-opacity-40 rounded">
-                                <div class="flex items-center justify-between px-3 py-2 cursor-pointer" @click="toggleExpand(s.season)">
-                                    <div class="flex items-center gap-2">
-                                        <input type="checkbox" :checked="isSeasonAll(s.season)" @click.stop="toggleSeason(s.season)"
-                                               class="w-4 h-4 accent-green-500">
-                                        <span class="font-semibold text-sm">Season <span x-text="s.season"></span></span>
-                                        <span class="text-xs text-gray-500" x-text="'· ' + s.episodes.length + ' ep'"></span>
-                                    </div>
-                                    <span class="text-gray-400 text-xs" x-text="expanded[s.season] ? '▲' : '▼'"></span>
-                                </div>
-                                <div x-show="expanded[s.season]" class="px-3 pb-3 grid grid-cols-1 sm:grid-cols-2 gap-1">
-                                    <template x-for="ep in s.episodes" :key="ep.episode">
-                                        <label class="flex items-center gap-2 text-xs text-gray-300 py-1 px-2 rounded hover:bg-gray-700 cursor-pointer">
-                                            <input type="checkbox" :checked="isEpisodeSelected(s.season, ep.episode)"
-                                                   @change="toggleEpisode(s.season, ep.episode)" class="w-4 h-4 accent-green-500">
-                                            <span class="text-gray-500" x-text="'E'+String(ep.episode).padStart(2,'0')"></span>
-                                            <span class="truncate" :class="epInLibrary(s.season, ep.episode) && 'text-green-400'"
-                                                  x-text="ep.name" :title="ep.name"></span>
-                                            <span x-show="epInLibrary(s.season, ep.episode)" class="text-green-500 ml-auto"
-                                                  title="Already delivered by Zapflix">✓</span>
-                                        </label>
-                                    </template>
-                                </div>
+                        <button class="pill" x-show="bottomTab === 'logs'" @click="clearLogs()">Clear</button>
+                        <span style="font-size:12.5px;color:rgba(255,255,255,.5)" x-show="bottomTab === 'history'"
+                              x-text="historyList.length + ' delivered'"></span>
+                    </div>
+                    <div class="scroll" style="flex:1" id="log-container" x-show="bottomTab === 'logs'">
+                        <template x-for="(log, idx) in logs" :key="idx">
+                            <div class="logline ell" :title="log"
+                                 :style="log.includes('❌') ? 'color:#f87171' : ((log.includes('✅') || log.includes('🚀') || log.includes('✨')) ? 'color:#4ade80' : 'color:#c7cdd4')"
+                                 x-text="log"></div>
+                        </template>
+                        <div x-show="logs.length === 0" style="color:rgba(255,255,255,.35);font-size:13px;text-align:center;margin-top:28px">Waiting for tasks…</div>
+                    </div>
+                    <div class="scroll" style="flex:1" x-show="bottomTab === 'history'" x-cloak>
+                        <template x-for="(h, idx) in historyList" :key="idx">
+                            <div class="hist-row">
+                                <svg class="ic ic16" x-show="h.type === 'movie'"><use href="#ic-movie"/></svg><svg class="ic ic16" x-show="h.type !== 'movie'" x-cloak><use href="#ic-tv"/></svg>
+                                <span class="ell" style="flex:1" x-text="h.fname" :title="h.fname"></span>
+                                <span style="font-size:12px;color:rgba(255,255,255,.5);white-space:nowrap"
+                                      x-text="fmtTime(h.ts) + (h.folder ? ' · 📁 ' + h.folder : '')"></span>
                             </div>
                         </template>
-                    </div>
-                </template>
-            </div>
-        </div>
-
-        <!-- Active tasks -->
-        <div class="mb-6 glass-panel rounded-lg shadow-2xl overflow-hidden border border-blue-900" x-show="tasks.length > 0" x-cloak>
-            <div class="bg-blue-900 bg-opacity-30 px-4 py-2 text-xs text-blue-300 border-b border-blue-900">
-                ⏳ ACTIVE TASKS <span class="text-blue-400 font-bold" x-text="'· ' + tasks.length"></span>
-            </div>
-            <div class="p-3 space-y-1.5">
-                <template x-for="t in tasks" :key="t.id">
-                    <div class="flex justify-between items-center gap-3 text-xs">
-                        <div class="min-w-0 flex items-center gap-2">
-                            <span class="animate-pulse">●</span>
-                            <span class="text-gray-200 font-semibold truncate" x-text="t.name"></span>
-                            <span class="text-gray-500" x-text="t.type"></span>
-                            <span class="text-gray-500" x-text="'started ' + new Date(t.started * 1000).toLocaleTimeString()"></span>
-                        </div>
-                        <button @click="cancelTask(t)" :disabled="t.cancelling"
-                                class="px-3 py-1 rounded font-semibold transition"
-                                :class="t.cancelling ? 'bg-gray-700 text-gray-400' : 'bg-red-700 hover:bg-red-600'">
-                            <span x-text="t.cancelling ? 'Stopping…' : '🛑 Cancel'"></span>
-                        </button>
-                    </div>
-                </template>
-            </div>
-        </div>
-
-        <!-- Monitored shows -->
-        <div class="mb-6 glass-panel rounded-lg shadow-2xl overflow-hidden" x-show="monitored.length > 0" x-cloak>
-            <div class="bg-gray-800 bg-opacity-80 px-4 py-2 text-xs text-gray-400 border-b border-gray-700 flex justify-between items-center">
-                <span>🔔 MONITORED SHOWS <span class="text-gray-600" x-text="'· ' + monitored.length"></span></span>
-                <button @click="checkNow()" class="text-blue-300 hover:text-blue-100 transition font-semibold">Check now</button>
-            </div>
-            <div class="p-3 space-y-1.5 max-h-48 overflow-y-auto">
-                <template x-for="m in monitored" :key="m.imdb_id">
-                    <div class="flex justify-between items-center gap-3 text-xs">
-                        <div class="min-w-0">
-                            <span class="text-gray-200 font-semibold" x-text="m.name"></span>
-                            <span class="text-gray-500 ml-2"
-                                  x-text="m.last_grab ? ('last grab ' + m.last_grab) : 'waiting for new episodes'"></span>
-                        </div>
-                        <div class="whitespace-nowrap space-x-3 text-gray-500">
-                            <span x-text="m.last_check ? ('checked ' + new Date(m.last_check * 1000).toLocaleString()) : 'not checked yet'"></span>
-                            <button @click="unmonitor(m)" class="px-2 py-0.5 bg-gray-700 rounded hover:bg-red-700 transition" title="Stop monitoring">✕</button>
-                        </div>
-                    </div>
-                </template>
-            </div>
-        </div>
-
-        <!-- NAS Downloads (aria2) -->
-        <div class="mb-6 glass-panel rounded-lg shadow-2xl overflow-hidden" x-show="downloads.length > 0" x-cloak>
-            <div class="bg-gray-800 bg-opacity-80 px-4 py-2 text-xs text-gray-400 border-b border-gray-700 flex justify-between items-center">
-                <span>NAS DOWNLOADS <span class="text-gray-600">· aria2</span></span>
-                <span>
-                    <span class="text-blue-400" x-text="countBy('active') + ' active'"></span>
-                    <span class="text-yellow-400 ml-2" x-show="countBy('waiting')" x-text="countBy('waiting') + ' queued'"></span>
-                    <span class="text-green-500 ml-2" x-show="countBy('complete')" x-text="countBy('complete') + ' done'"></span>
-                    <span class="text-red-400 ml-2" x-show="countBy('error')" x-text="countBy('error') + ' failed'"></span>
-                </span>
-            </div>
-            <div class="p-3 space-y-2 max-h-80 overflow-y-auto">
-                <template x-for="d in downloads" :key="d.gid">
-                    <div class="text-xs">
-                        <div class="flex justify-between items-center gap-3">
-                            <span class="truncate text-gray-200" x-text="d.name" :title="d.name"></span>
-                            <span class="whitespace-nowrap text-gray-400 flex items-center gap-2">
-                                <template x-if="d.status === 'active'">
-                                    <span><span x-text="fmtBytes(d.speed) + '/s'"></span> · <span x-text="fmtEta(d.eta)"></span></span>
-                                </template>
-                                <span x-show="d.status === 'waiting'" class="text-yellow-400">queued</span>
-                                <span x-show="d.status === 'complete'" class="text-green-500">✓ <span x-text="fmtBytes(d.total)"></span></span>
-                                <span x-show="d.status === 'error'" class="text-red-400" :title="d.error">✗ failed</span>
-                                <button x-show="d.status === 'active' || d.status === 'waiting'"
-                                        @click="cancelDownload(d)" title="Cancel this download"
-                                        class="px-1.5 rounded bg-gray-700 hover:bg-red-700 transition">✕</button>
-                            </span>
-                        </div>
-                        <div class="h-1.5 bg-gray-700 bg-opacity-60 rounded mt-1 overflow-hidden">
-                            <div class="h-full rounded transition-all duration-500"
-                                 :class="d.status === 'error' ? 'bg-red-500' : (d.status === 'complete' ? 'bg-green-500' : 'bg-blue-500')"
-                                 :style="'width:' + Math.max(d.progress, 2) + '%'"></div>
-                        </div>
-                    </div>
-                </template>
-            </div>
-        </div>
-
-        <!-- Failed files (retryable) -->
-        <div class="mb-6 glass-panel rounded-lg shadow-2xl overflow-hidden border border-red-900" x-show="failures.length > 0" x-cloak>
-            <div class="bg-red-900 bg-opacity-30 px-4 py-2 text-xs text-red-300 border-b border-red-900 flex justify-between items-center">
-                <span>FAILED FILES <span class="text-red-400 font-bold" x-text="'· ' + failures.length"></span></span>
-                <span class="space-x-3">
-                    <button @click="retryAllFailures()" :disabled="retrying"
-                            class="text-blue-300 hover:text-blue-100 transition font-semibold disabled:opacity-50">
-                        <span x-text="retrying ? 'Retrying…' : '🔁 Retry all'"></span>
-                    </button>
-                    <button @click="clearFailures()" class="text-gray-400 hover:text-white transition">Clear all</button>
-                </span>
-            </div>
-            <div class="p-3 space-y-2 max-h-60 overflow-y-auto">
-                <template x-for="f in failures" :key="f.id">
-                    <div class="flex justify-between items-center gap-3 text-xs">
-                        <div class="min-w-0">
-                            <div class="truncate text-gray-200" x-text="f.filename" :title="f.filename"></div>
-                            <div class="text-gray-500">
-                                <span x-text="f.content_name"></span> ·
-                                <span class="text-red-400" x-text="f.reason"></span> ·
-                                <span x-text="new Date(f.ts * 1000).toLocaleString()"></span>
-                            </div>
-                        </div>
-                        <div class="whitespace-nowrap space-x-2">
-                            <button @click="retryFailure(f)" :disabled="retrying"
-                                    class="px-2 py-1 bg-blue-600 rounded font-semibold hover:bg-blue-700 transition disabled:opacity-50">Retry</button>
-                            <button @click="dismissFailure(f)"
-                                    class="px-2 py-1 bg-gray-700 rounded hover:bg-gray-600 transition" title="Dismiss">✕</button>
-                        </div>
-                    </div>
-                </template>
-            </div>
-        </div>
-
-        <!-- Settings modal -->
-        <div x-show="settings.open" x-cloak
-             class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-70 p-4"
-             @click.self="settings.open = false" @keydown.escape.window="settings.open = false">
-            <div class="glass-panel rounded-lg shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-                <div class="bg-gray-800 bg-opacity-80 px-5 py-3 border-b border-gray-700 flex justify-between items-center">
-                    <span class="font-bold">⚙️ Settings</span>
-                    <button @click="settings.open = false" class="text-gray-400 hover:text-white">✕</button>
-                </div>
-                <div class="p-5 space-y-4 text-sm">
-                    <div>
-                        <label class="block text-xs text-gray-400 mb-1">Preferred quality (best first, comma-separated)</label>
-                        <input x-model="settings.form.preferred_quality" placeholder="1080p, 720p"
-                               class="w-full p-2 rounded bg-gray-800 border border-gray-600 focus:outline-none focus:border-blue-500">
-                    </div>
-                    <div>
-                        <label class="block text-xs text-gray-400 mb-1">Exclude keywords (comma-separated)</label>
-                        <input x-model="settings.form.exclude_keywords" placeholder="cam, hdcam, telesync"
-                               class="w-full p-2 rounded bg-gray-800 border border-gray-600 focus:outline-none focus:border-blue-500">
-                    </div>
-                    <div>
-                        <label class="block text-xs text-gray-400 mb-1">Library folders (comma-separated, inside the aria2 download dir)</label>
-                        <input x-model="settings.form.library_folders" placeholder="movies, series, anime"
-                               class="w-full p-2 rounded bg-gray-800 border border-gray-600 focus:outline-none focus:border-blue-500">
-                    </div>
-                    <div class="grid grid-cols-2 gap-3">
-                        <div>
-                            <label class="block text-xs text-gray-400 mb-1">Default movie folder</label>
-                            <input x-model="settings.form.default_movie_folder" placeholder="movies"
-                                   class="w-full p-2 rounded bg-gray-800 border border-gray-600 focus:outline-none focus:border-blue-500">
-                        </div>
-                        <div>
-                            <label class="block text-xs text-gray-400 mb-1">Default series folder</label>
-                            <input x-model="settings.form.default_series_folder" placeholder="series"
-                                   class="w-full p-2 rounded bg-gray-800 border border-gray-600 focus:outline-none focus:border-blue-500">
-                        </div>
-                    </div>
-                    <div class="grid grid-cols-3 gap-3">
-                        <div>
-                            <label class="block text-xs text-gray-400 mb-1">Episode delay (s)</label>
-                            <input x-model="settings.form.delay_between_episodes" type="number" step="0.5" min="0.5"
-                                   class="w-full p-2 rounded bg-gray-800 border border-gray-600 focus:outline-none focus:border-blue-500">
-                        </div>
-                        <div>
-                            <label class="block text-xs text-gray-400 mb-1">Monitor every (h)</label>
-                            <input x-model="settings.form.check_interval_hours" type="number" step="1" min="1"
-                                   class="w-full p-2 rounded bg-gray-800 border border-gray-600 focus:outline-none focus:border-blue-500">
-                        </div>
-                        <div>
-                            <label class="block text-xs text-gray-400 mb-1">RD poll timeout (s)</label>
-                            <input x-model="settings.form.poll_timeout" type="number" step="60" min="60"
-                                   class="w-full p-2 rounded bg-gray-800 border border-gray-600 focus:outline-none focus:border-blue-500">
-                        </div>
-                    </div>
-                    <div>
-                        <label class="block text-xs text-gray-400 mb-1">Jellyfin host (for automatic library scans after deliveries)</label>
-                        <input x-model="settings.form.jellyfin_host" placeholder="http://192.168.178.35:8096"
-                               class="w-full p-2 rounded bg-gray-800 border border-gray-600 focus:outline-none focus:border-blue-500">
-                        <p class="text-xs text-gray-600 mt-1">Also set <code>JELLYFIN_API_KEY</code> in <code>.env</code> (Jellyfin → Dashboard → API Keys).</p>
-                    </div>
-                    <p class="text-xs text-gray-500">Secrets (Real-Debrid key, aria2 secret…) live in <code>.env</code> and can't be edited here.
-                        Changes apply from the next download — no restart needed.</p>
-                    <div class="flex justify-end gap-2 pt-1">
-                        <button @click="settings.open = false" class="px-4 py-2 bg-gray-700 rounded hover:bg-gray-600 transition">Cancel</button>
-                        <button @click="saveSettings()" :disabled="settings.saving"
-                                class="px-5 py-2 bg-blue-600 rounded font-bold hover:bg-blue-700 transition disabled:opacity-50">
-                            <span x-text="settings.saving ? 'Saving…' : 'Save'"></span>
-                        </button>
+                        <div x-show="historyList.length === 0" style="color:rgba(255,255,255,.35);font-size:13px;text-align:center;margin-top:28px">Nothing delivered yet.</div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Logs -->
-        <div class="flex-grow flex flex-col glass-panel rounded-lg shadow-2xl overflow-hidden mb-4 min-h-0">
-            <div class="bg-gray-800 bg-opacity-80 px-4 py-2 text-xs text-gray-400 border-b border-gray-700 flex justify-between items-center">
-                <span class="space-x-3">
-                    <button @click="bottomTab = 'logs'" class="transition"
-                            :class="bottomTab === 'logs' ? 'text-white font-bold' : 'hover:text-white'">SYSTEM LOGS</button>
-                    <button @click="bottomTab = 'history'; fetchHistory()" class="transition"
-                            :class="bottomTab === 'history' ? 'text-white font-bold' : 'hover:text-white'">📜 HISTORY</button>
-                </span>
-                <button x-show="bottomTab === 'logs'" @click="clearLogs()" class="hover:text-white transition">Clear</button>
-                <span x-show="bottomTab === 'history'" class="text-gray-600" x-text="historyList.length + ' delivered'"></span>
-            </div>
-            <div x-show="bottomTab === 'logs'" class="p-4 font-mono text-xs md:text-sm h-64 overflow-y-auto" id="log-container">
-                <template x-for="(log, idx) in logs" :key="idx">
-                    <div class="mb-1 break-words pb-1 border-b border-gray-800 border-opacity-30 last:border-0"
-                         :class="log.includes('❌') ? 'text-red-400' : ((log.includes('✅') || log.includes('🚀') || log.includes('✨')) ? 'text-green-400' : 'text-gray-300')"
-                         x-text="log"></div>
-                </template>
-                <div x-show="logs.length === 0" class="text-gray-500 italic text-center mt-10">Waiting for tasks…</div>
-            </div>
-            <div x-show="bottomTab === 'history'" x-cloak class="p-4 text-xs md:text-sm h-64 overflow-y-auto">
-                <template x-for="(h, idx) in historyList" :key="idx">
-                    <div class="flex items-center gap-2 mb-1 pb-1 border-b border-gray-800 border-opacity-30 last:border-0">
-                        <span x-text="h.type === 'movie' ? '🎬' : '📺'"></span>
-                        <span class="text-gray-500 whitespace-nowrap" x-text="new Date(h.ts * 1000).toLocaleString()"></span>
-                        <span class="font-semibold text-gray-200 whitespace-nowrap" x-text="h.content_name"></span>
-                        <span class="truncate text-gray-400" x-text="h.fname" :title="h.fname"></span>
-                        <span x-show="h.folder" class="ml-auto text-gray-600 whitespace-nowrap" x-text="'📁 ' + h.folder"></span>
-                    </div>
-                </template>
-                <div x-show="historyList.length === 0" class="text-gray-500 italic text-center mt-10">Nothing delivered yet.</div>
+        <!-- ══ Settings modal ══ -->
+        <div class="modal-bg" x-show="settings.open" x-cloak @click.self="settings.open = false"
+             @keydown.escape.window="settings.open = false">
+            <div class="modal">
+                <div style="display:flex;align-items:center;justify-content:space-between">
+                    <div style="font-size:18px;font-weight:700;display:flex;align-items:center;gap:8px"><svg class="ic ic20"><use href="#ic-settings"/></svg>Settings</div>
+                    <button class="round-x" @click="settings.open = false"><svg class="ic ic16"><use href="#ic-xmark"/></svg></button>
+                </div>
+                <div class="field">
+                    <label>Preferred quality (best first, comma-separated)</label>
+                    <input x-model="settings.form.preferred_quality" placeholder="1080p, 720p">
+                </div>
+                <div class="field">
+                    <label>Exclude keywords (comma-separated)</label>
+                    <input x-model="settings.form.exclude_keywords" placeholder="cam, hdcam, telesync">
+                </div>
+                <div class="field">
+                    <label>Library folders (inside the aria2 download dir)</label>
+                    <input x-model="settings.form.library_folders" placeholder="movies, series, anime">
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                    <div class="field"><label>Default movie folder</label><input x-model="settings.form.default_movie_folder" placeholder="movies"></div>
+                    <div class="field"><label>Default series folder</label><input x-model="settings.form.default_series_folder" placeholder="series"></div>
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+                    <div class="field"><label>Episode delay (s)</label><input type="number" step="0.5" min="0.5" x-model="settings.form.delay_between_episodes"></div>
+                    <div class="field"><label>Monitor every (h)</label><input type="number" step="1" min="1" x-model="settings.form.check_interval_hours"></div>
+                    <div class="field"><label>RD poll timeout (s)</label><input type="number" step="60" min="60" x-model="settings.form.poll_timeout"></div>
+                </div>
+                <div class="field">
+                    <label>Jellyfin host (automatic library scans after deliveries)</label>
+                    <input x-model="settings.form.jellyfin_host" placeholder="http://192.168.178.35:8096">
+                </div>
+                <p style="font-size:12px;color:rgba(255,255,255,.45);margin:0">
+                    Secrets (Real-Debrid key, aria2 secret, <code>JELLYFIN_API_KEY</code>) live in <code>.env</code> and can't be edited here.
+                    Changes apply from the next download — no restart needed.
+                </p>
+                <div style="display:flex;justify-content:flex-end;gap:10px">
+                    <button class="ep-pill" @click="settings.open = false">Cancel</button>
+                    <button class="ep-pill" style="background:#2563eb;font-weight:700" :disabled="settings.saving"
+                            @click="saveSettings()" x-text="settings.saving ? 'Saving…' : 'Save'"></button>
+                </div>
             </div>
         </div>
     </div>
@@ -476,57 +816,81 @@
                 detail: { loading: false, data: null, item: null },
                 selected: {},   // key "season-episode" -> true
                 expanded: {},   // season -> bool
-                backgrounds: ['net', 'clouds', 'cells'],
-                currentBg: null, vantaEffect: null, bgTimer: null,
+                discoverTab: 'movies', heroIndex: 0, lastSelect: 'all',
+                posterCache: {},
 
                 async init() {
+                    this.posterCache = this.loadPosters();
                     this.fetchStatus();
                     this.startLogPolling();
-                    this.startBackgroundRoulette();
                 },
 
-                // ── Background roulette (Vanta.js) ─────────────────────────
-                pickBackground(exclude) {
-                    const pool = this.backgrounds.filter(b => b !== exclude);
-                    return pool[Math.floor(Math.random() * pool.length)];
+                // ── Discover navigation ─────────────────────────────────────
+                goDiscover() { this.view = 'catalog'; this.results = []; },
+                setDiscoverTab(t) {
+                    this.discoverTab = t; this.heroIndex = 0;
+                    this.view = 'catalog'; this.results = [];
+                },
+                heroItems() { return (this.discover[this.discoverTab] || []).slice(0, 5); },
+                heroItem() {
+                    const h = this.heroItems();
+                    return h.length ? h[this.heroIndex % h.length] : null;
+                },
+                heroNext() { const n = this.heroItems().length; if (n) this.heroIndex = (this.heroIndex + 1) % n; },
+                heroPrev() { const n = this.heroItems().length; if (n) this.heroIndex = (this.heroIndex - 1 + n) % n; },
+
+                // ── Poster lookup for download/monitor rows ─────────────────
+                // Built from everything the UI has already seen, so rows show
+                // real artwork without any new backend endpoint.
+                loadPosters() {
+                    try { return JSON.parse(localStorage.getItem('zapflix_posters') || '{}'); }
+                    catch (e) { return {}; }
+                },
+                savePosters() {
+                    try { localStorage.setItem('zapflix_posters', JSON.stringify(this.posterCache)); } catch (e) {}
+                },
+                cachePosters(items) {
+                    let added = false;
+                    (items || []).forEach(i => {
+                        const k = (i?.name || '').toLowerCase().trim();
+                        if (k && i.poster && this.posterCache[k] !== i.poster) { this.posterCache[k] = i.poster; added = true; }
+                    });
+                    if (added) this.savePosters();
+                },
+                titleFromFile(n) {
+                    if (!n) return '';
+                    return String(n)
+                        .replace(/\s*-\s*S\d{1,3}E\d{1,4}.*$/i, '')   // canonical "Title - S01E05.mkv"
+                        .replace(/\.[a-z0-9]{2,4}$/i, '')
+                        .trim();
+                },
+                posterFor(title) {
+                    if (!title) return '';
+                    return this.posterCache[String(title).toLowerCase().trim()] || '';
+                },
+                async ensureMonitoredPosters() {
+                    for (const m of this.monitored) {
+                        const k = (m.name || '').toLowerCase().trim();
+                        if (!k || this.posterCache[k] || !m.imdb_id) continue;
+                        try {
+                            const d = await (await fetch(`/api/meta/series/${m.imdb_id}`)).json();
+                            if (d && d.poster) { this.posterCache[k] = d.poster; this.savePosters(); }
+                        } catch (e) { /* leave the neutral block */ }
+                    }
                 },
 
-                setBackground(name) {
-                    try {
-                        if (this.vantaEffect) { this.vantaEffect.destroy(); this.vantaEffect = null; }
-                        const common = { el: "#vanta-bg", mouseControls: true, touchControls: true,
-                                         gyroControls: false, minHeight: 200, minWidth: 200,
-                                         scale: 1, scaleMobile: 1 };
-                        if (name === 'clouds') {
-                            // Night-sky tuning to match the dark theme
-                            this.vantaEffect = VANTA.CLOUDS({ ...common,
-                                backgroundColor: 0x111827, skyColor: 0x0b1226,
-                                cloudColor: 0x1e293b, cloudShadowColor: 0x070b14,
-                                sunColor: 0x1d4ed8, sunGlareColor: 0x2563eb,
-                                sunlightColor: 0x1e40af, speed: 0.8 });
-                        } else if (name === 'cells') {
-                            this.vantaEffect = VANTA.CELLS({ ...common,
-                                color1: 0x111827, color2: 0x1d4ed8,
-                                size: 2.5, speed: 1.0 });
-                        } else {
-                            this.vantaEffect = VANTA.NET({ ...common,
-                                color: 0x3b82f6, backgroundColor: 0x111827,
-                                points: 15, maxDistance: 22, spacing: 16 });
-                        }
-                        this.currentBg = name;
-                    } catch (e) { console.warn("Vanta failed", e); }
-                },
-
-                startBackgroundRoulette() {
-                    this.setBackground(this.pickBackground());          // random on load
-                    this.bgTimer = setInterval(
-                        () => this.setBackground(this.pickBackground(this.currentBg)),  // always switch
-                        30 * 60 * 1000);                                // every 30 minutes
+                fmtTime(ts) {
+                    if (!ts) return '';
+                    const d = new Date(ts * 1000);
+                    return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) + ' ' +
+                           d.toLocaleTimeString(undefined, { hour12: false });
                 },
 
                 async fetchStatus() {
-                    try { this.status = await (await fetch('/api/status')).json(); }
-                    catch (e) { console.error(e); }
+                    try {
+                        this.status = await (await fetch('/api/status')).json();
+                        if (!this.destFolder) this.destFolder = this.status.library?.default_movie || '';
+                    } catch (e) { console.error(e); }
                 },
 
                 async search() {
@@ -535,14 +899,16 @@
                     try {
                         const res = await fetch(`/api/search?q=${encodeURIComponent(this.query)}`);
                         this.results = (await res.json()).filter(r => r.type !== 'error');
+                        this.cachePosters(this.results);
                     } catch (e) { this.pushLog("❌ Search failed: " + e); }
                     this.searching = false;
                 },
 
                 async openDetail(item) {
+                    if (!item) return;
                     this.view = 'detail';
                     this.detail = { loading: true, data: null, item };
-                    this.selected = {}; this.expanded = {};
+                    this.selected = {}; this.expanded = {}; this.lastSelect = 'all';
                     // Preselect the configured library folder for this type
                     this.destFolder = (item.type === 'movie'
                         ? this.status.library?.default_movie
@@ -551,6 +917,7 @@
                         const res = await fetch(`/api/meta/${item.type}/${item.imdb_id}`);
                         const data = await res.json();
                         this.detail.data = data;
+                        this.cachePosters([data]);
                         if (data.type === 'series') {
                             this.toggleAll(true);   // default: everything selected
                             if (data.seasons && data.seasons.length) this.expanded[data.seasons[0].season] = true;
@@ -595,6 +962,14 @@
                     this.selected = { ...this.selected };
                 },
                 selectedCount() { return Object.keys(this.selected).length; },
+                seasonDelivered(s) {
+                    const so = this.seasonObj(s); if (!so) return 0;
+                    return so.episodes.filter(ep => this.epInLibrary(s, ep.episode)).length;
+                },
+                seasonSelected(s) {
+                    const so = this.seasonObj(s); if (!so) return 0;
+                    return so.episodes.filter(ep => this.isEpisodeSelected(s, ep.episode)).length;
+                },
 
                 buildSelection() {
                     if (this.detail.data.type === 'movie') return null;
@@ -623,6 +998,21 @@
                     setTimeout(() => this.downloading = false, 2500);
                 },
 
+                // Hero download button — straight from the home screen
+                async quickDownloadMovie(item) {
+                    if (!item) return;
+                    this.downloading = true;
+                    this.pushLog(`[UI] Requesting download for ${item.name}…`);
+                    try {
+                        await fetch('/api/download', {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ imdb_id: item.imdb_id, type: 'movie', selection: null,
+                                                   folder: this.destFolder || this.status.library?.default_movie || '' })
+                        });
+                    } catch (e) { this.pushLog("❌ Request failed: " + e); }
+                    setTimeout(() => this.downloading = false, 2500);
+                },
+
                 pushLog(m) { this.logs.push(m); },
                 clearLogs() { this.logs = []; },
 
@@ -645,6 +1035,7 @@
                 async fetchDiscover() {
                     try {
                         this.discover = await (await fetch('/api/discover')).json();
+                        this.cachePosters([...(this.discover.movies || []), ...(this.discover.series || [])]);
                     } catch (e) { /* home screen just stays empty */ }
                 },
                 async fetchLibrary() {
@@ -675,6 +1066,7 @@
                         if (!this.epInLibrary(s.season, ep.episode))
                             this.selected[`${s.season}-${ep.episode}`] = true;
                     }));
+                    this.selected = { ...this.selected };
                 },
 
                 // ── Active tasks (cancel) ───────────────────────────────────
@@ -741,6 +1133,7 @@
                 async fetchMonitored() {
                     try {
                         this.monitored = await (await fetch('/api/monitored')).json();
+                        this.ensureMonitoredPosters();
                     } catch (e) { /* keep last known list */ }
                 },
                 isMonitored(imdbId) {

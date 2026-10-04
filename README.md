@@ -122,6 +122,10 @@ Zapflix/
 - **Long series**: for a whole season, a detected season pack covers the season
   in one torrent, and Torrentio queries are rate-limited to avoid throttling.
 - **aria2**: files are foldered as `<Title>/Season NN/` for Jellyfin.
+- **UI**: a floating glass window over a layered dark background, in three
+  columns — monitored shows + NAS downloads on the left, discover hero and
+  poster grid in the middle, active tasks + failures + logs/history on the
+  right. The design spec lives in [design/HANDOFF.md](design/HANDOFF.md).
 - **Naming**: episodes are recognised whether the release uses `S01E05`,
   `1x05`, or a bare anime-style absolute number (`[Group] Show - 25.mkv` →
   S02E01 via the per-season episode counts), then renamed canonically to
